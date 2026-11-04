@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from core_engine import ModelError, OpenAIModel, TokenUsage
 from core_engine.analysis_schema import analysis_schema
+from qa_fixtures import screenshot
 
 
 def envelope():
@@ -64,6 +65,19 @@ class OpenAIProviderTests(unittest.TestCase):
         data.pop("usage")
         self.response.read.return_value = json.dumps(data).encode()
         self.assertIsNone(self.generate().usage)
+
+    def test_validated_images_use_data_urls_without_remote_fetches(self):
+        image = screenshot()
+        self.model.generate(instructions="trusted", context={"report": "screenshot"},
+                            schema=analysis_schema({"report"}), images=(image,))
+        body = json.loads(self.connection.request.call_args.kwargs["body"])
+        content = body["input"][0]["content"]
+        self.assertEqual(content[0]["type"], "input_text")
+        self.assertEqual(content[1], {"type": "input_image", "image_url": image.data_url(), "detail": "high"})
+        self.connection.reset_mock()
+        with self.assertRaises(ValueError):
+            self.model.generate(instructions="trusted", context={}, schema={}, images=("https://untrusted.test/image",))
+        self.connection.request.assert_not_called()
 
     def test_http_failures_and_redirect_do_not_retry_or_read_error_body(self):
         for status, code in ((401, "MODEL_AUTH_FAILED"), (403, "MODEL_AUTH_FAILED"), (429, "MODEL_RATE_LIMITED"),

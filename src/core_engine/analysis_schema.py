@@ -20,7 +20,7 @@ def _object(**properties):
 
 
 _SCHEMA = _object(
-    classification=_enum("general_bug", "security_suspected", "needs_review"),
+    classification=_enum("functional", "visual", "interaction", "content", "performance", "compatibility", "needs_review"),
     confidence=_enum("low", "medium", "high"),
     classification_reason=_text(),
     severity=_enum("unknown", "low", "medium", "high", "critical"),
@@ -45,6 +45,14 @@ def analysis_schema(source_refs: set[str]) -> dict:
 
 def validate_output(value, schema: dict) -> None:
     """Validate only the JSON Schema subset defined above; not a general validator."""
+    if "anyOf" in schema:
+        for choice in schema["anyOf"]:
+            try:
+                validate_output(value, choice)
+                return
+            except ValueError:
+                pass
+        raise ValueError("no schema variant matched")
     kind = schema["type"]
     if kind == "object":
         properties = schema["properties"]
@@ -58,7 +66,7 @@ def validate_output(value, schema: dict) -> None:
         for item in value:
             validate_output(item, schema["items"])
     elif kind == "string":
-        if type(value) is not str or not value.strip():
+        if type(value) is not str or (schema.get("minLength", 1) > 0 and not value.strip()):
             raise ValueError("expected nonempty text")
         value.encode("utf-8")
         if "enum" in schema:
@@ -66,5 +74,8 @@ def validate_output(value, schema: dict) -> None:
                 raise ValueError("invalid enum value")
         elif not schema["minLength"] <= len(value) <= schema["maxLength"]:
             raise ValueError("incorrect text length")
+    elif kind == "null":
+        if value is not None:
+            raise ValueError("expected null")
     else:
         raise ValueError("unsupported schema")

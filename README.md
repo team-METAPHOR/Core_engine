@@ -1,29 +1,52 @@
 # Core_engine
 
-team METAPHOR의 웹 버그·보안 취약점 제보 검증 엔진입니다. 공개형 버그 바운티와 기업 간 의뢰에서 접수한 제보를 승인된 환경에서 재현하고, 근거와 분석 결과를 담당자에게 제공하는 것을 목표로 합니다. 제보자가 개인인지 기업인지는 엔진 실행 조건에 영향을 주지 않습니다.
+team METAPHOR의 **스크린샷 기반 웹앱 자동 QA 엔진**입니다. 사용자가 스크린샷만 올리거나 설명을 함께 입력하면, AI가 문제 후보를 해석하고 브라우저 재현 계획을 만듭니다. 실제 실행 근거로 재현 여부를 판단하고 개발자가 검토할 QA 보고서를 제공합니다.
 
-현재는 **승인 범위 검사 → 실제 Chromium 재현 → AI 분류·심각도 추정·해결 방안 제안**을 지원합니다. 일반 버그와 보안 취약점 후보 모두 개발자에게 전달할 수정 제안과 검증 절차를 생성합니다. AI 결과는 사람이 검토하며, 브라우저 재현 판정은 AI가 변경하지 않습니다.
+제품 범위는 **문제 파악·재현·검증·보고·수정 후 재검증**입니다. 고객 코드 수정, 패치 적용, PR 생성은 하지 않습니다. 기존 보안 취약점 분류는 일반 버그 유형으로 전환했습니다.
 
-## 구현된 기능
+## 파이프라인
 
-| 모듈 | 기능 |
+```mermaid
+flowchart TD
+    A[스크린샷 및 선택 설명] --> B[AI 제보 해석]
+    B --> C{정보 충분?}
+    C -->|아니오| D[추가 질문]
+    D -->|답변으로 재접수| B
+    C -->|예| E[현재 페이지 관찰]
+    E --> F[AI 재현 계획 생성]
+    F --> G[실행 범위와 계획 검사]
+    G --> H[두 독립 브라우저 시도]
+    H --> I{조작 대상 탐색 실패?}
+    I -->|허용된 범위에서 최대 2회| J[대상 선택자만 보정]
+    J --> G
+    I -->|검증 완료 또는 보정 불가| K[근거 기반 판정]
+    K --> L[JSON 및 한국어 QA 보고서]
+    L -->|개발자가 수정 후 요청| M[저장된 동일 계획으로 재검증]
+    M --> H
+```
+
+AI는 제보·화면을 해석하고 계획·보고서를 생성합니다. 엔진이 허용한 동작을 Playwright가 실행하며, 판정은 고정된 조건과 실제 관찰 기록으로 계산합니다. 매 동작 전후에 화면을 기록하고, 실패했을 때만 AI에 대상 재탐색을 요청합니다. 모든 클릭마다 모델을 호출하지는 않습니다.
+
+## 구현 기능
+
+| 영역 | 구현 |
 |---|---|
-| `policy.py` | 원점·경로·메서드·DNS/IP 검사, 제외 경로 우선 적용, 리다이렉트 검사 |
-| `budget.py` | 작업 전체의 요청 수·분당 요청·동시 요청·실행 시간·응답 용량 제한 |
-| `transport.py` | 승인된 숫자 IP에 직접 연결, 원래 호스트의 HTTP Host·TLS 인증서 검사 유지 |
-| `plan.py` | 페이지 이동·클릭·입력·텍스트 확인 동작을 최대 20단계로 제한 |
-| `browser.py` | Playwright 실행, 시도별 새 브라우저 컨텍스트, 초기화 확인, 취소·승인 철회 확인 |
-| `verdict.py` | 두 시도의 근거를 비교해 재현됨·재현 안 됨·판단 불가 판정 |
-| `analysis.py` | 일반 버그·보안 의심·검토 필요 분류, 원인 가설·수정 제안·회귀 검증 절차 생성 |
-| `analysis_schema.py` | JSON 형식·길이·분류값·실제 근거 ID 검증 |
-| `openai_provider.py` | OpenAI Responses API 연동, 모델·출력 토큰·통신 시간 제한, 오류 처리 |
-| `model.py` / `redaction.py` | 다른 모델 공급자를 위한 인터페이스와 알려진 비밀정보 패턴 마스킹 |
+| 스크린샷 입력 | PNG/JPEG/WebP 검증, 크기 제한, 메타데이터 제거, 지정 영역 마스킹, 이미지 모델 입력 |
+| 제보 해석 | 화면에서 확인한 사실·가설·기대 동작 출처 구분, 정보 부족 시 질문 및 답변 후 재개 |
+| 버그 분류 | 기능·시각·상호작용·콘텐츠·성능·호환성·검토 필요 |
+| 재현 계획 | 현재 페이지의 요소와 스크린샷을 읽고 최대 20개 동작 생성 |
+| 실행·재계획 | 두 독립 실행, 단계별 관찰, 실패한 동작의 선택자만 최대 2회 보정 |
+| 검증 조건 | 텍스트, 표시 여부, 활성화, 요소 개수, 영역 겹침, 화면/요소 넘침 |
+| 근거 | 화면, 정제된 요소 정보, 요청 URL·상태·차단 코드, 콘솔/페이지 오류, 단계·시각·계획 해시 |
+| 보고 | 재현 결과, 임시 영향도, 원인 가설, 해결 방향, 검증 절차, 근거 참조 |
+| 저장·연동 | 작업별 JSON/PNG/Markdown, 진행 이벤트, 추가 정보 응답·동일 계획 재검증 API |
+| 실행 통제 | 원점·경로·DNS/IP 검사, 요청 수·용량·시간 제한, 취소·승인 철회, 모델 호출 수 제한 |
 
-브라우저의 HTTP 요청은 모두 가로채 전용 전송 모듈로 처리합니다. 이 모듈은 요청마다 DNS 결과 전체를 검사하고, 검사한 IP에 연결합니다. 브라우저가 원래 호스트로 직접 요청을 보내게 하지 않습니다. 현재는 한 작업에 하나의 정확한 원점만 지원하며 허용 메서드는 `GET`, `HEAD`, `OPTIONS`입니다.
+분류 가능한 유형과 자동으로 검증 가능한 동작은 다릅니다. 성능 문제처럼 현재 조건으로 표현할 수 없는 제보는 추가 정보를 요청하거나 판단을 보류합니다. AI 결과의 정확성은 실제 모델 평가와 사람의 검토가 필요합니다.
 
 ## 설치
 
-Python 3.11 이상이 필요합니다. 브라우저 실행에는 Playwright와 Chromium이 필요합니다. 아래 명령은 macOS/Linux 기준입니다.
+Python 3.11 이상을 사용합니다. macOS/Linux 기준:
 
 ```bash
 python3 -m venv .venv
@@ -32,141 +55,108 @@ python -m pip install ".[browser]"
 python -m playwright install chromium --only-shell
 ```
 
-Linux에서 브라우저 실행에 필요한 시스템 라이브러리가 없다면 `python -m playwright install --with-deps chromium --only-shell`을 사용합니다. 정책·예산·판정 모듈만 사용하려면 `python -m pip install .`로 설치할 수 있습니다. 소스를 수정한 뒤에는 다시 설치합니다.
+Linux에 브라우저 시스템 라이브러리가 없으면 `python -m playwright install --with-deps chromium --only-shell`을 사용합니다. 소스를 수정한 뒤에는 패키지를 다시 설치합니다. 소스 기준 테스트는 `PYTHONPATH=src`를 붙여 실행할 수도 있습니다.
 
-## API 키 없이 로컬 데모 실행
+## 키 없이 전체 QA 데모
 
 ```bash
-python examples/demo.py
-python examples/demo.py --fixed
+python examples/qa_demo.py
+python examples/qa_demo.py --repair --retest-fixed
 ```
 
-첫 번째 명령은 검색 결과가 비었을 때 이전 목록이 남는 예제를 두 번 실행해 `reproduced`를 출력합니다. 두 번째는 수정된 예제를 실행해 `not_reproduced`를 출력합니다. 예제 서버는 `127.0.0.1`의 임시 포트에서 실행되고 종료 시 정리됩니다. 외부 사이트나 AI API에 접속하지 않습니다.
+실제 Chromium으로 합성 검색 화면의 스크린샷을 만든 뒤, **명시적인 고정 모델 응답**으로 제보 해석·계획 생성·브라우저 실행·보고서를 연결합니다. 고정 응답은 실제 AI 추론이나 모델 품질 평가가 아닙니다. 외부 AI API를 호출하지 않습니다.
 
-분석 결과의 형태는 고정 응답으로 확인할 수 있습니다. 아래 `fixture`는 **실제 AI 추론이 아닌 테스트용 데이터**이며 API 키나 요금이 필요하지 않습니다.
+두 번째 명령은 잘못된 버튼 ID를 현재 화면의 ID로 보정한 후 버그를 재현하고, 수정된 합성 화면에서 **같은 계획 해시**로 다시 검증합니다. `reproduced → not_reproduced`, `regression=resolved_in_test` 흐름을 확인할 수 있습니다. 예제만 수정된 빌드로 전환하며 QA 엔진은 앱 코드를 수정하지 않습니다.
 
-```bash
-python examples/analyze_report.py
-python examples/analyze_report.py --security
-python examples/demo.py --analysis fixture
-python examples/demo.py --fixed --analysis fixture
-```
+기본 출력은 `.qa-results/<job_id>/`입니다. 콘솔에 보고서 경로와 판정이 표시됩니다. `report.md`와 함께 저장된 PNG를 유지하면 Markdown에서 근거 화면을 볼 수 있습니다. `--output PATH`로 위치를 지정합니다. 기존 `examples/demo.py`, `examples/analyze_report.py`도 개별 모듈 데모로 사용할 수 있습니다.
 
-앞의 두 명령은 재현 전 제보 분석 형식, 뒤의 두 명령은 실제 Chromium 실행 결과를 분석 서비스에 전달하는 흐름을 보여줍니다. 수정된 화면에서도 재현 판정은 `not_reproduced`로 유지되며, 분석 신뢰도와 검토 사유에 미확인 상태가 반영됩니다.
+## 실제 이미지 AI 연동
 
-## 실제 AI 사용
-
-서버 환경에 `OPENAI_API_KEY`와 `OPENAI_MODEL`을 설정합니다. 모델은 계정에서 사용 가능한 **Responses API + Structured Outputs 지원 모델 ID**를 직접 선택합니다. API 키는 프론트에 전달하거나 저장소에 커밋하지 않습니다. `.env.example`은 설정 이름 참고용이며 `.env` 자동 로딩은 하지 않습니다.
+서버 비밀정보 설정으로 `OPENAI_API_KEY`를 주입하고, `OPENAI_MODEL`에는 계정에서 사용할 수 있는 **이미지 입력 + Responses API + Structured Outputs 지원 모델 ID**를 설정합니다. `.env.example`은 이름 참고용이며 `.env` 자동 로딩은 하지 않습니다.
 
 ```bash
-# 키는 서버의 비밀정보 설정으로 주입합니다. 아래 값은 모델 ID 자리 표시자입니다.
+# API 키는 서버 비밀정보 설정으로 주입합니다.
 export OPENAI_MODEL="YOUR_SUPPORTED_MODEL_ID"
-python examples/analyze_report.py --live
-python examples/analyze_report.py --live --security
-python examples/demo.py --analysis openai
+python examples/qa_demo.py --live
 ```
 
-각 명령은 API를 **1회 호출**하므로 요금이 발생할 수 있습니다. 자동 재시도는 없습니다. 기본 출력 상한은 3,000토큰, 소켓 통신 제한 시간은 30초이며 생성자에서 조정할 수 있습니다. 출력 토큰 상한에 도달해 응답이 불완전하면 결과를 보류합니다. 테스트는 모의 응답을 사용하며 실제 모델의 판단 품질·계정별 모델 사용 가능 여부는 별도 검증이 필요합니다.
+기본 작업은 해석·계획·보고에 3회, 선택자 보정 시 최대 2회가 추가됩니다. 기본 모델 호출 상한은 작업당 6회이며 자동 HTTP 재시도는 없습니다. 이미지도 과금 대상입니다. 응답 저장 옵션은 `store=false`이지만 공급자의 전체 보존 정책을 대신하지 않습니다.
+
+유료 모델 호출은 자동 테스트에 포함하지 않습니다. 테스트는 프로토콜·흐름·실제 브라우저 결과를 검사하며, 모델의 분류 정확도·재현 계획 성공률·프롬프트 공격 저항성을 입증하지 않습니다.
+
+## 백엔드 호출
 
 ```python
-from dataclasses import asdict
-from core_engine import AnalysisService, BugReport, OpenAIModel
-
-report = BugReport(
-    report_id="report-123", program_id="program-1",
-    title="빈 검색 결과에서 이전 목록이 남음",
-    reproduction_steps="cat 검색 후 missing으로 다시 검색",
-    expected_result="빈 결과 표시", actual_result="이전 cat 목록 표시",
+from pathlib import Path
+from core_engine import (
+    BrowserOptions, JobStore, OpenAIModel, QARequest, QAService, RunPolicy, Screenshot,
 )
-service = AnalysisService(OpenAIModel.from_env())
-result = service.analyze(report)  # 재현 전 분류: reproduction=None
-# result = service.analyze(report, run)  # 동일 제보에 대한 BrowserRun이 준비된 경우
-payload = asdict(result)
+
+policy = RunPolicy("project-1", 1, "https://staging.example.com", ("/search",))
+service = QAService(
+    OpenAIModel.from_env(), policy, JobStore(".qa-results"),
+    options=BrowserOptions(width=1280, height=800, app_version="build-123"),
+)
+request = QARequest(
+    report_id="report-123", program_id="project-1",
+    entry_url="https://staging.example.com/search",
+    screenshot=Screenshot(Path("report.png").read_bytes()),
+    description="cat 검색 후 missing 검색 시 이전 목록이 남습니다.",
+    expected_result="빈 검색 결과에서는 이전 항목이 사라져야 합니다.",
+    test_data="합성 데이터: cat은 결과 있음, missing은 결과 없음",
+)
+
+# reset_test_state: 성공 시 True를 반환하는 신뢰할 수 있는 비동기 초기화 함수
+# check_authorization: 현재 승인 범위와 외부 AI 전송 허용을 확인하는 동기 함수
+result = await service.run(request, reset=reset_test_state, is_authorized=check_authorization)
+
+# 추가 정보 요청에 응답
+# continued = await service.resume(result.job_id, "추가 설명", reset=reset_test_state,
+#                                  is_authorized=check_authorization)
+
+# 개발자가 수정한 배포본에 같은 계획 재실행
+# verified = await service.retest(result.job_id, reset=reset_test_state,
+#                                 is_authorized=check_authorization)
 ```
 
-`analyze()`는 동기 함수입니다. 비동기 백엔드는 별도 작업 워커 또는 `await asyncio.to_thread(service.analyze, report, run)`으로 호출합니다. 서비스는 HTTP 서버·작업 큐를 만들지 않습니다. 상세 입력·출력·실패 처리는 [AI 분석 연동 명세](docs/ai-analysis.md)에 정리했습니다.
+`reset(0)`은 계획 생성을 위한 첫 관찰, `reset(1)`과 `reset(2)`는 검증 시도 전에 호출됩니다. 재계획하면 다시 두 시도를 초기화합니다. 브라우저 컨텍스트 초기화만으로 서버 데이터까지 초기화되지는 않습니다.
 
-## AI 분석 결과
+백엔드 계약과 이벤트·결과·실패 코드는 [QA 연동 명세](docs/qa-pipeline.md), 기존 텍스트 분석 단독 API는 [분석 API v2](docs/ai-analysis.md)를 참고합니다. 이 저장소는 엔진 라이브러리이며 HTTP 서버·고객 인증·작업 큐·관제 UI는 백엔드와 프론트가 연결합니다.
 
-| 분류 | 의미 | 검토 대상 |
-|---|---|---|
-| `general_bug` | 현재 제보와 근거상 일반 기능 버그로 추정 | `developer_review` |
-| `security_suspected` | 접근 권한·정보 노출 등 보안 영향 가능성 | `security_review` |
-| `needs_review` | 판단 근거 부족 또는 분석 실패 | `manual_review` |
-
-`general_bug`는 보안 위험이 없다는 보증이 아닙니다. 낮은 신뢰도로 일반 버그라고 분류한 응답은 `needs_review`로 변경합니다. 보안 의심은 낮은 신뢰도여도 보안 검토 대상으로 유지합니다. 재현 근거가 없거나 재현이 확인되지 않으면 신뢰도는 최대 `medium`이며, 모든 결과의 `human_review_required`는 `True`입니다.
-
-분석에는 임시 심각도(`unknown`/`low`/`medium`/`high`/`critical`), 분류 근거, 원인 **가설**, 해결 방안, 근거 참조, 검증 절차, 고려 사항과 부족한 정보가 포함됩니다. 소스 코드를 읽지 않았으므로 자동 패치나 확정 원인을 제공하지 않습니다. 정보가 부족한 경우 해결 방안은 추가 진단 단계일 수 있습니다. 보안 후보에도 방어적 수정 방안을 제공합니다.
-
-모델에 브라우저·셸 실행 도구를 제공하지 않습니다. 재현 판정과 관찰 기록은 엔진이 원래 실행 결과에서 복사합니다. AI가 다른 근거 ID를 인용하거나 출력 형식을 위반하면 분석을 거절합니다. API 거절·한도 초과·통신 실패 시에도 `needs_review`, `status=unavailable`, `assessment=null`, 구분 가능한 `error_code`를 반환하고 기존 재현 판정을 보존합니다. 이 결과를 확정 판정이나 완료된 수정으로 처리하면 안 됩니다.
-
-외부 API에는 제보의 제목·재현 순서·기대/실제 결과와 최소 실행 요약만 전달합니다. 알려진 키·인증 헤더·쿠키·이메일 패턴과 URL의 사용자정보·쿼리·프래그먼트를 마스킹합니다. 이 처리는 모든 개인정보·비밀을 찾는 기능이 아니며, 마스킹으로 진단 정보가 줄어들 수 있습니다. 고객사의 외부 전송 허용과 사전 정제는 백엔드에서 보장해야 합니다. `store=false`는 Responses 저장 옵션이며 공급자의 전체 데이터 보존 정책을 대체하지 않습니다.
-
-## 실행 계획과 결과
-
-`BrowserPlan`은 다음 입력을 받습니다.
-
-- `steps`: `navigate`, `click`, `fill`, `assert_text`로 구성된 불변 목록. 첫 단계는 페이지 이동이어야 합니다.
-- `ready`: 동작 완료를 확인하는 CSS 선택자와 텍스트. 로딩 중인 화면을 완료된 결과로 판정하지 않도록 반드시 지정합니다.
-- `symptom`: 신고된 증상을 확인할 CSS 선택자와 텍스트. 현재는 화면에 존재하는 요소의 `inner_text()`를 읽고 양끝 공백을 제거해 비교합니다.
-- `step_timeout_ms`: 각 동작·확인의 제한 시간. 기본 3초, 최대 5초입니다.
-
-`BrowserRunner.run()`에는 계획 외에 신뢰할 수 있는 서버 코드로 작성한 두 콜백이 필요합니다.
-
-- `reset(attempt)`: 각 시도 전에 테스트 서버 상태를 초기화하고 성공 시 `True`를 반환하는 비동기 함수. 새 브라우저를 만드는 것만으로 서버 상태가 초기화되지는 않습니다.
-- `is_authorized()`: 현재 프로그램 승인 버전과 중지 상태를 확인하는 빠른 동기 함수. `True`가 아니거나 확인에 실패하면 후속 요청을 차단합니다. 계획이나 사용자 입력에서 이 함수를 생성하면 안 됩니다.
-
-선택적으로 `threading.Event`를 `cancelled`에 전달할 수 있습니다. 이벤트가 설정되면 후속 요청과 단계를 중단합니다. 이미 전송한 요청은 회수할 수 없습니다.
-
-결과 `BrowserRun`에는 프로그램 ID, 범위 버전, 계획 해시, 시도별 결과, 최종 판정, 실행 요약 근거가 포함됩니다.
+## 판정 규칙
 
 | 판정 | 조건 |
 |---|---|
-| `reproduced` | 두 시도 모두 정상 완료되고 같은 증상 텍스트가 확인됨 |
-| `not_reproduced` | 두 시도 모두 정상 완료됐으나 증상 텍스트가 확인되지 않음 |
-| `inconclusive` | 시도 간 불일치, 초기화 실패, 선택자·준비 상태 실패, 정책 차단, 한도 초과 등 |
+| `reproduced` | 두 시도 모두 완료되어 증상 조건 참, 기대 조건 거짓 |
+| `not_reproduced` | 두 시도 모두 완료되어 기대 조건 참, 증상 조건 거짓 |
+| `inconclusive` | 두 시도 불일치, 초기화·준비 실패, 정책 차단, 양쪽 조건 모두 참/거짓 등 |
 
-`not_reproduced`는 버그가 없다는 확정 판정이 아닙니다. 증상 요소가 없거나 페이지 동작 자체가 실패하면 `inconclusive`입니다. 잘못된 계획은 브라우저를 시작하기 전에 예외로 거절하고, Playwright 설치·브라우저 시작 같은 실행 환경 오류는 호출자에게 예외로 전달합니다.
+새 QA 계획은 완료·기대·증상 조건을 실행 전에 고정합니다. 재계획으로 이 조건이나 입력값·동작 순서를 바꾸지 못합니다. 기존 `BrowserPlan`의 `expected=None` 호출은 이전 텍스트 증상 판정을 유지하지만, 새 QA 서비스는 기대 조건을 필수로 생성합니다.
 
-근거에는 시각, 시도 번호, 완료 단계 수, 준비 상태, 증상 확인 여부, 차단 코드만 포함합니다. 입력한 값·DOM 원문·쿠키를 결과에 복사하지 않습니다. **스크린샷·전체 DOM 수집, 마스킹 저장소, 영속 저장은 아직 구현 전**입니다. 현재 반환된 실행 요약은 호출자가 저장해야 합니다.
+스크린샷만으로 기대 동작을 추정한 경우 `expectation_source=image_inferred`로 표시합니다. 증상 재현은 제품 요구사항 위반의 확정과 다르므로 모든 보고서에서 사람의 검토가 필요합니다. `not_reproduced`는 버그가 없다는 보증이 아닙니다.
+
+## 데이터와 실행 범위
+
+- 화면은 최대 4 MiB, 4096px 이하·총 800만 픽셀 이하의 정적 이미지입니다. 업로드 이미지의 비밀 영역은 호출 전 `Screenshot.masked()`로 지정하고, 고객사의 외부 AI 전송 허용을 확인합니다. 메타데이터 제거는 이미지 안의 개인정보 탐지가 아닙니다.
+- 브라우저에서는 입력칸·비밀번호·`data-private`·`data-sensitive`·추가 지정 선택자를 화면에서 마스킹합니다. 알려진 이메일·인증 정보는 요소 텍스트와 오류 기록에서도 정제합니다. 이미지·캔버스 안의 모든 개인정보를 자동 인식하지는 않습니다.
+- 전체 DOM·응답 본문·쿠키·인증 헤더를 모델이나 보고서에 저장하지 않습니다. 근거는 제한된 요소 요약과 요청 메타데이터입니다. 원인과 서버 데이터의 정확성은 추가 확인이 필요할 수 있습니다.
+- 한 작업은 정확한 원점 하나와 승인된 경로만 사용합니다. DNS 전체 결과를 검사하고 확인한 숫자 IP에 직접 연결하며 Host와 TLS 검증을 유지합니다. 현재 HTTP 메서드는 GET/HEAD/OPTIONS이며 POST·파일 업로드·WebSocket·팝업·다운로드·지속 SSE·압축 응답은 지원하지 않습니다.
+- 필요하면 백엔드가 준비한 합성 테스트 세션의 `Authorization`/`Cookie`를 `BrowserOptions.session_headers`로 주입하고 같은 계정·데이터 환경을 식별할 `test_context_id`를 지정합니다. 승인된 전송 모듈에서만 사용하며 로그인·세션 갱신을 AI가 수행하지 않습니다. 헤더는 결과에 기록하지 않습니다. 재검증 시 화면 크기·테스트 컨텍스트·세션 모드가 달라지면 비교를 보류합니다.
+- 작업 도중 취소·승인 철회가 발생하면 새 행동과 모델 호출을 중단합니다. 이미 전송된 요청은 회수할 수 없습니다. 진행 중인 모델 HTTP 요청은 자체 통신 제한 시간까지 남을 수 있습니다.
+- 배포 시 별도 워커/컨테이너·네트워크 출구 제한·강제 종료 감독을 적용해야 합니다. `JobStore`는 신뢰된 백엔드 전용 로컬 저장소로, 디렉터리 0700·파일 0600 권한을 사용합니다. 고객별 접근 통제·보존 기간·삭제·백업은 백엔드 책임입니다.
 
 ## 테스트
 
-설치한 가상 환경에서 실행합니다.
-
 ```bash
-python -m unittest discover -s tests -v
+PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests -v
 ```
 
-검사는 로컬 테스트 서버를 사용합니다. 실제 Chromium으로 정상 재현·수정 확인·시도 간 불일치·초기화 실패·요청 차단을 확인하고, 전송 모듈의 IP 고정·원래 Host 유지·승인 철회·용량 제한을 검사합니다. Playwright가 없으면 브라우저 검사는 건너뛰므로, 전체 검증에는 `.[browser]` 설치와 Chromium 준비가 필요합니다.
-
-AI 검사는 외부 API를 호출하지 않습니다. 분류별 해결 방안, 응답 스키마, 존재하지 않는 근거 참조, 프로그램 혼용, 낮은 신뢰도, 비밀정보 마스킹, API 거절·불완전 응답·통신 실패와 재현 판정 보존을 검사합니다. 이 검사는 실제 모델의 오분류율이나 프롬프트 공격 저항성을 측정하는 평가가 아닙니다.
-
-## 현재 지원 범위와 배포 조건
-
-- 고객사가 승인한 스테이징·합성 테스트 환경의 익명 세션만 지원합니다. 로그인 상태·쿠키·인증 헤더는 전달하지 않습니다.
-- POST, WebSocket, 지속적인 SSE, 압축 응답, 다운로드·팝업은 지원하지 않습니다. 정책 차단·HTTP 오류·페이지 스크립트 오류가 생기면 결과를 보류합니다.
-- 서비스 워커를 차단하고 브라우저의 직접 HTTP 접속에 실패하는 프록시를 설정합니다. 이것은 운영체제 수준의 네트워크 방화벽을 대신하지 않습니다.
-- 실제 외부 대상에 배포하기 전에는 별도 워커 프로세스/컨테이너, 네트워크 출구 제한, 메모리 제한, 강제 종료 감독이 필요합니다. DNS 조회·운영체제 호출까지 엄격한 종료 시간을 보장하려면 외부 프로세스 감독이 필요합니다.
-- GET만 허용해도 서버의 상태 변경이 완전히 방지되지는 않습니다. 고객사는 테스트 대상과 제외 경로를 좁게 승인해야 합니다. 삭제·결제·로그아웃 등 알려진 경로는 추가 차단합니다.
-
-## 백엔드와의 역할 분담
-
-엔진은 정책 검사·실행·판정과 결과 생성을 담당합니다. 고객사 권한, 승인된 범위 버전 발급, 작업 큐, 결과 저장, 조회 API와 관제 화면은 백엔드·프론트의 책임입니다. `RunPolicy`는 신뢰할 수 있는 백엔드의 승인된 범위로 생성해야 하며, 제보자나 AI가 보낸 허용 범위를 그대로 사용하면 안 됩니다.
-
-분석 시 프로그램 ID와 실행 근거의 일관성을 검사하지만, 같은 프로그램 내 **제보와 실행의 연결**은 백엔드가 보장해야 합니다. `BrowserRun`에는 아직 제보 ID가 없습니다. `review_queue`는 권장 담당자 유형이며, 엔진이 개발자에게 메시지를 보내거나 티켓을 자동 생성하지는 않습니다. AI 텍스트는 관제 화면에서 안전하게 렌더링하고, 자동 명령 실행이나 패치 적용에 사용하지 않습니다.
-
-## 이후 개발 단계
-
-1. 마스킹된 스크린샷·DOM 근거와 영속 저장 인터페이스.
-2. 제한된 AI 재현 계획 생성과 계획 검토 흐름.
-3. 실제 모델 평가 데이터셋, 분류·근거 인용·해결 방안 품질 평가 및 소스 코드 연동.
-4. 백엔드 작업 큐·진행 이벤트 연동과 운영 워커 격리.
+실제 Chromium·로컬 서버와 모의 모델을 사용합니다. 검색 버그/수정 상태, 시각적 겹침·잘림, 추가 질문·재개, 선택자 보정과 판정 기준 고정, 근거 저장, 모델 오류, 취소·승인 철회, 프로그램 혼용, 이미지·텍스트 마스킹, 저장 경로·파일 해시, 네트워크 범위 검사를 포함합니다.
 
 ## 코드 출처와 참고
 
-정책·예산·근거 기반 판정은 [IWANTGOHOME의 고정 커밋](https://github.com/Kowntaewook/IWANTGOHOME/tree/27f6835d2aaae2e5515eb19c360e2242c3308fcd)의 `programs.py`, `web.py`, `research_policy.py`, `full_hunt/scenario.py`를 바탕으로 이식했습니다. 브라우저 요청 가로채기와 숫자 IP 연결 방식은 같은 저장소의 `browser_sessions.py`를 참고했습니다.
+범위·예산·전송 통제는 [IWANTGOHOME의 고정 커밋](https://github.com/Kowntaewook/IWANTGOHOME/tree/27f6835d2aaae2e5515eb19c360e2242c3308fcd)을 바탕으로 이식했습니다. QA 파이프라인과 이미지·보고서 기능은 이 저장소에서 추가했습니다.
 
-브라우저 연동은 Playwright의 [컨텍스트 요청 가로채기](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route), [WebSocket 라우팅](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-route-web-socket), [요청 응답 제공](https://playwright.dev/python/docs/api/class-route#route-fulfill) API를 사용합니다.
-
-OpenAI 연동은 공식 [Structured Outputs 문서](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)의 Responses API `text.format` JSON Schema 형식을 사용합니다. `JsonModel`을 구현하면 분석 서비스와 출력 검증을 유지하면서 다른 공급자를 연결할 수 있습니다. 다른 공급자 구현은 아직 포함하지 않습니다.
+- [OpenAI 이미지 입력](https://developers.openai.com/api/docs/guides/images-vision), [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)
+- [Playwright 스크린샷](https://playwright.dev/python/docs/screenshots), [페이지 API](https://playwright.dev/python/docs/api/class-page), [요소 API](https://playwright.dev/python/docs/api/class-locator)
+- [Pillow 릴리스 노트](https://pillow.readthedocs.io/en/stable/releasenotes/index.html)

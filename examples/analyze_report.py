@@ -7,12 +7,12 @@ import json
 from core_engine import AnalysisService, BugReport, Generation, OpenAIModel
 
 
-def make_report(security=False):
-    if security:
+def make_report(visual=False):
+    if visual:
         return BugReport(
-            "demo-access", "local-demo", "다른 테스트 계정의 문서가 보인다는 제보",
-            "승인된 테스트 환경에서 합성 계정 A로 로그인 후 합성 계정 B의 문서 화면을 열었다고 제보함.",
-            "문서 소유자에게만 열람 허용", "다른 계정 문서의 본문이 보였다고 제보함. 아직 실행 검증 전.",
+            "demo-access", "local-demo", "좁은 화면에서 버튼이 제목과 겹침",
+            "모바일 너비에서 화면을 열면 제목과 확인 버튼이 겹친다고 제보함.",
+            "제목과 버튼이 서로 겹치지 않음", "제목과 버튼이 겹친다고 제보함. 아직 실행 검증 전.",
         )
     return BugReport(
         "demo-search", "local-demo", "빈 검색 결과에서 이전 목록이 남음",
@@ -23,19 +23,19 @@ def make_report(security=False):
 class FixtureModel:
     """Contract demonstration only: fixed data, no reasoning or network calls."""
 
-    def __init__(self, security=False):
-        self.security = security
+    def __init__(self, visual=False):
+        self.visual = visual
 
     def generate(self, *, instructions, context, schema):
-        if self.security:
-            classification, severity = "security_suspected", "high"
-            summary = "제보상 타 계정 문서 노출 가능성이 있으나 실행 검증되지 않았습니다."
-            hypothesis = "문서 조회 시 서버의 소유권 확인이 누락됐을 가능성이 있습니다."
-            title = "서버에서 문서 접근 권한 검증"
-            description = "세션 사용자와 문서 접근 권한을 서버에서 확인하고 허용되지 않은 요청을 거절하는 방안을 검토합니다."
-            checks = ["승인된 스테이징의 합성 계정 A/B로 본인 문서 접근 성공과 타 계정 문서 접근 거절을 확인합니다."]
+        if self.visual:
+            classification, severity = "visual", "high"
+            summary = "제보상 좁은 화면에서 요소 겹침이 있으나 실행 검증되지 않았습니다."
+            hypothesis = "고정 위치와 좁은 화면 너비가 충돌했을 가능성이 있습니다."
+            title = "반응형 레이아웃 검토"
+            description = "제목과 버튼 영역을 분리하고 좁은 화면에서 줄바꿈되도록 레이아웃을 검토합니다."
+            checks = ["모바일과 데스크톱 너비에서 요소가 겹치지 않는지 확인합니다."]
         else:
-            classification, severity = "general_bug", "low"
+            classification, severity = "functional", "low"
             summary = "제보상 빈 검색 결과에서 이전 목록이 남습니다. 원인과 수정은 검토가 필요합니다."
             hypothesis = "빈 응답일 때 목록 상태를 초기화하지 않는 분기가 있을 가능성이 있습니다."
             title = "빈 검색 결과에서도 목록 상태 갱신"
@@ -53,18 +53,18 @@ class FixtureModel:
         }, ensure_ascii=False), "offline-fixture")
 
 
-def analyze_example(*, run=None, live=False, security=False):
-    model = OpenAIModel.from_env() if live else FixtureModel(security)
-    return AnalysisService(model).analyze(make_report(security), run)
+def analyze_example(*, run=None, live=False, visual=False):
+    model = OpenAIModel.from_env() if live else FixtureModel(visual)
+    return AnalysisService(model).analyze(make_report(visual), run)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="실제 OpenAI API 1회 호출: 요금 발생 가능")
-    parser.add_argument("--security", action="store_true", help="보안 의심 제보 예시")
+    parser.add_argument("--visual", action="store_true", help="시각적 버그 제보 예시")
     args = parser.parse_args()
     try:
-        result = analyze_example(live=args.live, security=args.security)
+        result = analyze_example(live=args.live, visual=args.visual)
     except ValueError as exc:
         parser.error(str(exc))
     print(json.dumps({"analysis_mode": "openai" if args.live else "fixture (실제 AI 아님)",

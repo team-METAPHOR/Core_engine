@@ -1,0 +1,125 @@
+"""Sanitized browser snapshots and local evidence artifacts."""
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import re
+from uuid import uuid4
+
+from .artifacts import JobStore
+from .images import Screenshot
+from .redaction import redact_text
+
+
+@dataclass(frozen=True)
+class BrowserOptions:
+    width: int = 1280
+    height: int = 800
+    app_version: str = "unspecified"
+    test_context_id: str = "anonymous"
+    step_timeout_ms: int = 3000
+    mask_selectors: tuple[str, ...] = ()
+    session_headers: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+
+    def __post_init__(self):
+        if type(self.width) is not int or type(self.height) is not int or not 320 <= self.width <= 1920 or not 320 <= self.height <= 1080:
+            raise ValueError("viewport must be between 320x320 and 1920x1080")
+        if not isinstance(self.app_version, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", self.app_version):
+            raise ValueError("invalid app version")
+        if not isinstance(self.test_context_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", self.test_context_id):
+            raise ValueError("invalid test context ID")
+        if type(self.step_timeout_ms) is not int or not 100 <= self.step_timeout_ms <= 5000:
+            raise ValueError("step timeout must be 100..5000 ms")
+        if not isinstance(self.mask_selectors, tuple) or len(self.mask_selectors) > 30 or any(
+            not isinstance(value, str) or not 1 <= len(value) <= 256 for value in self.mask_selectors
+        ):
+            raise ValueError("invalid sensitive selectors")
+        if not isinstance(self.session_headers, dict) or any(
+            key not in {"Authorization", "Cookie"} or not isinstance(value, str) or not 1 <= len(value) <= 4096
+            or any(ord(c) < 32 or ord(c) > 126 for c in value) for key, value in self.session_headers.items()
+        ):
+            raise ValueError("invalid trusted session headers")
+        object.__setattr__(self, "session_headers", dict(self.session_headers))
+        if self.session_headers and self.test_context_id == "anonymous":
+            raise ValueError("trusted session headers require an explicit synthetic test context ID")
+
+    def public(self):
+        return {"width": self.width, "height": self.height, "app_version": self.app_version,
+                "test_context_id": self.test_context_id, "session_mode": "fixed_headers" if self.session_headers else "anonymous"}
+
+
+# Snapshot extraction executes only this fixed engine script. Page text remains untrusted.
+_ELEMENTS = """sensitive => {
+    const excluded = sensitive.join(',');
+    function safeText(el) {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let node, text = '', visited = 0;
+        while ((node = walker.nextNode()) && visited++ < 200 && text.length < 200) {
+            if (node.parentElement && !node.parentElement.closest(excluded + ',script,style,input,textarea,select')) {
+                text += node.textContent + ' ';
+            }
+        }
+        return text.trim().slice(0,200);
+    }
+    function selector(el) {
+        if (el.id) return '#' + CSS.escape(el.id);
+        if (el.dataset.testid) return '[data-testid=' + JSON.stringify(el.dataset.testid) + ']';
+        const parts = [];
+        for (let node = el; node && node !== document.body && parts.length < 8; node = node.parentElement) {
+            let segment = node.localName;
+            if (!segment) break;
+            const peers = Array.from(node.parentElement?.children || []).filter(x => x.localName === node.localName);
+            if (peers.length > 1) segment += ':nth-of-type(' + (peers.indexOf(node) + 1) + ')';
+            parts.unshift(segment);
+        }
+        return parts.join(' > ');
+    }
+    return Array.from(document.querySelectorAll('input,button,select,textarea,a,[role],[id],[data-testid],h1,h2,p,label,span,li'))
+        .slice(0,600).filter(el => !el.closest(excluded) && el.getClientRects().length)
+        .slice(0,80).map(el => ({selector: selector(el), tag: el.localName,
+            role: el.getAttribute('role') || '', name: (el.getAttribute('aria-label') || (el.labels?.[0] ? safeText(el.labels[0]) : '')).slice(0,120),
+            text: /^(input|textarea|select)$/.test(el.localName) ? '' : safeText(el),
+            enabled: !el.disabled, input_type: el.localName === 'input' ? el.type : ''}));
+}"""
+
+
+class Recorder:
+    def __init__(self, store: JobStore, job_id: str, options: BrowserOptions):
+        self.store, self.job_id, self.options = store, job_id, options
+        self.snapshots: list[dict] = []
+        self.total_image_bytes = 0
+        self.revision = -1
+        self.plan_sha256 = None
+
+    async def capture(self, page, *, attempt, step, phase, network, errors):
+        if len(self.snapshots) >= 256:
+            raise ValueError("snapshot limit exceeded")
+        sensitive = ["[data-private]", "[data-sensitive]", "input[type=password]", "input[type=hidden]", "iframe",
+                     *self.options.mask_selectors]
+        elements = await page.evaluate(_ELEMENTS, sensitive)
+        masks = [page.locator("css=" + selector) for selector in sensitive]
+        masks.append(page.locator("input,textarea,[contenteditable=true]"))
+        for item in elements:
+            for key in ("name", "text", "selector"):
+                cleaned = redact_text(item[key])
+                if cleaned != item[key]:
+                    masks.append(page.locator("css=" + item["selector"]))
+                item[key] = cleaned
+        elements = [item for item in elements if item["selector"] and len(item["selector"]) <= 256 and "REDACTED" not in item["selector"]]
+        data = await page.screenshot(type="png", full_page=False, mask=masks, animations="disabled", timeout=3000)
+        image = Screenshot(data)
+        self.total_image_bytes += len(image.data)
+        if self.total_image_bytes > 64 * 1024 * 1024:
+            raise ValueError("job screenshot budget exceeded")
+        snapshot = {
+            "id": uuid4().hex, "attempt": attempt, "step": step, "phase": phase,
+            "revision": self.revision, "plan_sha256": self.plan_sha256,
+            "created_at": datetime.now(timezone.utc).isoformat(), "url": redact_text(page.url),
+            "elements": elements, "image": self.store.image(self.job_id, image),
+            "network": list(network[-60:]), "errors": list(errors[-20:]),
+        }
+        self.snapshots.append(snapshot)
+        self.store.write_json(self.job_id, "snapshots.json", self.snapshots)
+        return snapshot
+
+    def image(self, snapshot) -> Screenshot:
+        return self.store.read_image(self.job_id, snapshot["image"])

@@ -1,4 +1,4 @@
-"""Guarded anonymous browser reproduction with two fresh contexts."""
+"""Guarded browser reproduction, deterministic checks and optional screenshot evidence."""
 
 from __future__ import annotations
 
@@ -12,8 +12,11 @@ from typing import Awaitable, Callable
 from uuid import uuid4
 
 from .budget import BudgetLimits, RequestBudget
-from .plan import BrowserPlan
+from .checks import observe_check, wait_for_check
+from .observation import BrowserOptions, Recorder
+from .plan import BrowserPlan, TextCheck
 from .policy import PolicyError, RunPolicy
+from .session import GuardedPage, launch_browser
 from .transport import GuardedTransport
 from .verdict import AttemptResult, Verdict, judge_attempts
 
@@ -27,6 +30,8 @@ class Evidence:
     symptom_observed: bool | None
     blocker: str | None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    expected_observed: bool | None = None
+    observation_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,44 +44,79 @@ class BrowserRun:
     evidence: tuple[Evidence, ...]
 
 
+def plan_digest(plan):
+    return hashlib.sha256(json.dumps(asdict(plan), sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+
+
 class BrowserRunner:
-    def __init__(self, policy: RunPolicy, limits: BudgetLimits = BudgetLimits()):
+    def __init__(self, policy: RunPolicy, limits: BudgetLimits = BudgetLimits(), *,
+                 options: BrowserOptions | None = None, recorder: Recorder | None = None):
         self.policy, self.limits = policy, limits
+        self.options, self.recorder = options or BrowserOptions(), recorder
+
+    def _transport(self, is_authorized, cancelled, budget):
+        return GuardedTransport(self.policy, budget or RequestBudget(self.limits), is_authorized,
+                                cancelled or threading.Event(), session_headers=self.options.session_headers)
+
+    async def inspect(self, url: str, *, reset, is_authorized, cancelled=None, budget=None) -> dict:
+        """Fresh read-only observation for planning; reset(0) is the discovery pass."""
+        from playwright.async_api import async_playwright
+
+        if self.recorder is None:
+            raise ValueError("inspect requires a recorder")
+        self.policy.check_url(url)
+        transport = self._transport(is_authorized, cancelled, budget)
+        try:
+            async with asyncio.timeout(self.limits.max_runtime_seconds):
+                transport.check()
+                await self._reset(reset, 0)
+                transport.check()
+                async with async_playwright() as pw:
+                    browser = await launch_browser(pw)
+                    try:
+                        async with GuardedPage(browser, transport, self.options, self.recorder) as session:
+                            await session.navigate(url)
+                            result = await session.capture(0, 0, "discovery")
+                            session.check()
+                            return result
+                    finally:
+                        await browser.close()
+        except TimeoutError:
+            raise PolicyError("RUNTIME_LIMIT") from None
+        finally:
+            transport.close()
+
+    @staticmethod
+    async def _reset(reset, ordinal):
+        try:
+            ok = await reset(ordinal)
+        except Exception:
+            raise PolicyError("RESET_FAILED") from None
+        if ok is not True:
+            raise PolicyError("RESET_FAILED")
 
     async def run(
-        self, plan: BrowserPlan, *,
-        reset: Callable[[int], Awaitable[bool]],
-        is_authorized: Callable[[], bool],
-        cancelled: threading.Event | None = None,
+        self, plan: BrowserPlan, *, reset: Callable[[int], Awaitable[bool]],
+        is_authorized: Callable[[], bool], cancelled: threading.Event | None = None,
+        budget: RequestBudget | None = None,
     ) -> BrowserRun:
-        """Callbacks are trusted host code. A plan can never supply either callback."""
+        """Callbacks/options are trusted host code, never supplied by a plan or model."""
         from playwright.async_api import async_playwright
 
         plan.validate_scope(self.policy)
-        budget = RequestBudget(self.limits)
-        transport = GuardedTransport(self.policy, budget, is_authorized, cancelled or threading.Event())
-        attempts: list[AttemptResult] = []
-        evidence: list[Evidence] = []
+        if self.recorder:
+            self.recorder.plan_sha256 = plan_digest(plan)
+        transport = self._transport(is_authorized, cancelled, budget)
+        attempts, evidence = [], []
         try:
             transport.check()
             async with asyncio.timeout(self.limits.max_runtime_seconds):
                 async with async_playwright() as pw:
-                    browser = await pw.chromium.launch(
-                        headless=True,
-                        proxy={"server": "http://127.0.0.1:1"},
-                        args=["--proxy-bypass-list=<-loopback>", "--disable-background-networking",
-                              "--disable-dns-prefetch", "--disable-quic",
-                              "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
-                    )
+                    browser = await launch_browser(pw)
                     try:
                         for ordinal in (1, 2):
                             transport.check()
-                            try:
-                                reset_ok = await reset(ordinal)
-                            except Exception:
-                                raise PolicyError("RESET_FAILED") from None
-                            if reset_ok is not True:
-                                raise PolicyError("RESET_FAILED")
+                            await self._reset(reset, ordinal)
                             transport.check()
                             result, record = await self._attempt(browser, plan, transport, ordinal)
                             attempts.append(result)
@@ -93,102 +133,71 @@ class BrowserRunner:
         finally:
             transport.close()
         pair = (attempts[0], attempts[1])
-        plan_hash = hashlib.sha256(json.dumps(asdict(plan), sort_keys=True, ensure_ascii=True).encode()).hexdigest()
-        return BrowserRun(self.policy.program_id, self.policy.scope_revision, plan_hash, pair, judge_attempts(pair), tuple(evidence))
+        return BrowserRun(self.policy.program_id, self.policy.scope_revision, plan_digest(plan),
+                          pair, judge_attempts(pair), tuple(evidence))
 
     async def _attempt(self, browser, plan, transport, ordinal):
         from playwright.async_api import Error, expect
 
-        context = await browser.new_context(service_workers="block", accept_downloads=False)
-        blocked: list[str] = []
-        completed = 0
-        ready = False
-        observed = None
-        blocker = None
-        workers: set[asyncio.Task] = set()
-
-        def block(code):
-            if not blocked:
-                blocked.append(code)
-
-        def check():
-            transport.check()
-            if blocked:
-                raise PolicyError(blocked[0])
-
-        async def route_request(route):
-            task = None
-            try:
-                check()
-                # No browser-direct request. The transport sends to a checked IP.
-                task = asyncio.create_task(asyncio.to_thread(transport.fetch, route.request.url, route.request.method))
-                workers.add(task)
-                response = await asyncio.shield(task)
-                check()
-                await route.fulfill(status=response.status, headers=response.headers, body=response.body)
-                if response.status >= 400:
-                    block("HTTP_ERROR")
-            except PolicyError as exc:
-                block(exc.code)
-                await route.abort("blockedbyclient")
-            except Error:
-                block("BROWSER_REQUEST_FAILED")
-            finally:
-                if task is not None and task.done():
-                    workers.discard(task)
-
-        async def websocket(ws):
-            block("WEBSOCKET_UNSUPPORTED")
-            await ws.close()
-
+        completed, ready, observed, expected, blocker = 0, False, None, None, None
+        snapshots = []
+        session = GuardedPage(browser, transport, self.options, self.recorder, plan.step_timeout_ms)
         try:
-            await context.route("**/*", route_request)
-            await context.route_web_socket("**/*", websocket)
-            page = await context.new_page()
-            page.set_default_timeout(plan.step_timeout_ms)
-            page.on("pageerror", lambda _: block("PAGE_SCRIPT_ERROR"))
-            page.on("download", lambda _: block("DOWNLOAD_UNSUPPORTED"))
-            page.on("popup", lambda _: block("POPUP_UNSUPPORTED"))
-            for step in plan.steps:
-                check()
-                if step.action == "navigate":
-                    response = await page.goto(step.target, wait_until="load", timeout=plan.step_timeout_ms)
-                    if response is None or response.status >= 400:
-                        raise PolicyError("NAVIGATION_FAILED")
-                else:
-                    locator = page.locator("css=" + step.target)
-                    if step.action == "click":
-                        await locator.click()
-                    elif step.action == "fill":
-                        await locator.fill(step.value)
-                    else:
-                        await expect(locator).to_have_text(step.value, timeout=plan.step_timeout_ms, use_inner_text=True)
-                check()
-                completed += 1
-            await expect(page.locator("css=" + plan.ready.selector)).to_have_text(
-                plan.ready.text, timeout=plan.step_timeout_ms, use_inner_text=True,
-            )
-            ready = True
-            locator = page.locator("css=" + plan.symptom.selector)
-            await locator.wait_for(state="visible")
-            observed = (await locator.inner_text()).strip() == plan.symptom.text.strip()
-            check()
+            async with session:
+                try:
+                    for index, step in enumerate(plan.steps):
+                        session.check()
+                        snapshot = await session.capture(ordinal, index, "before")
+                        if snapshot:
+                            snapshots.append(snapshot["id"])
+                        if step.action == "navigate":
+                            await session.navigate(step.target)
+                        else:
+                            locator = session.page.locator("css=" + step.target)
+                            if step.action == "click":
+                                await locator.click()
+                            elif step.action == "fill":
+                                # Credentials must come from trusted session setup, never model text.
+                                if await locator.get_attribute("type") in {"password", "hidden"}:
+                                    raise PolicyError("SENSITIVE_INPUT_UNSUPPORTED")
+                                await locator.fill(step.value)
+                            else:
+                                await expect(locator).to_have_text(step.value, timeout=plan.step_timeout_ms, use_inner_text=True)
+                        session.check()
+                        completed += 1
+                        snapshot = await session.capture(ordinal, index, "after")
+                        if snapshot:
+                            snapshots.append(snapshot["id"])
+                    await wait_for_check(session.page, plan.ready, plan.step_timeout_ms, session.check)
+                    ready = True
+                    if isinstance(plan.symptom, TextCheck):
+                        await session.page.locator("css=" + plan.symptom.selector).wait_for(state="visible")
+                    observed = await observe_check(session.page, plan.symptom)
+                    if plan.expected is not None:
+                        expected = await observe_check(session.page, plan.expected)
+                        if observed == expected:
+                            raise PolicyError("ORACLE_AMBIGUOUS")
+                    session.check()
+                except PolicyError as exc:
+                    blocker = exc.code
+                except (Error, AssertionError):
+                    blocker = session.blocked[0] if session.blocked else "STEP_OR_READINESS_FAILED"
+                try:
+                    snapshot = await session.capture(ordinal, completed, "blocked" if blocker else "verdict")
+                    if snapshot:
+                        snapshots.append(snapshot["id"])
+                except (PolicyError, Error):
+                    blocker = blocker or "EVIDENCE_CAPTURE_FAILED"
         except PolicyError as exc:
             blocker = exc.code
-        except (Error, AssertionError):
-            blocker = blocked[0] if blocked else "STEP_OR_READINESS_FAILED"
-        finally:
-            await context.close()
-            if workers:
-                await asyncio.gather(*workers, return_exceptions=True)
-        if blocked:
-            blocker = blocked[0]
+        if session.blocked:
+            blocker = session.blocked[0]
         try:
             transport.check()
         except PolicyError as exc:
             blocker = exc.code
         if blocker:
-            observed = None
-        record = Evidence(uuid4().hex, ordinal, completed, ready, observed, blocker)
-        result = AttemptResult(blocker is None, observed, (record.id,), blocker)
-        return result, record
+            observed = expected = None
+        record = Evidence(uuid4().hex, ordinal, completed, ready, observed, blocker,
+                          expected_observed=expected, observation_ids=tuple(snapshots))
+        return AttemptResult(blocker is None, observed, (record.id,), blocker), record

@@ -10,7 +10,7 @@ from core_engine import (
 from core_engine.redaction import redact_text
 
 
-def proposal(classification="general_bug"):
+def proposal(classification="functional"):
     return {
         "classification": classification, "confidence": "high",
         "classification_reason": "빈 목록 처리에 대한 기능 버그 제보입니다.",
@@ -48,7 +48,7 @@ class FakeModel:
 
 
 class AnalysisTests(unittest.TestCase):
-    def test_general_bug_has_solutions_and_preserves_deterministic_run(self):
+    def test_functional_has_solutions_and_preserves_deterministic_run(self):
         run = browser_run()
         before = asdict(run)
         data = proposal()
@@ -56,7 +56,7 @@ class AnalysisTests(unittest.TestCase):
         model = FakeModel(data)
         result = AnalysisService(model).analyze(report(), run)
         self.assertEqual((result.status, result.classification, result.review_queue),
-                         ("completed", "general_bug", "developer_review"))
+                         ("completed", "functional", "developer_review"))
         self.assertTrue(result.human_review_required)
         self.assertEqual(result.reproduction, run.verdict)
         self.assertEqual(result.observations, run.evidence)
@@ -68,18 +68,18 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(len(model.calls), 1)
         self.assertNotIn("program_id", model.calls[0]["context"])
 
-    def test_security_candidate_gets_own_queue_and_remediation(self):
-        data = proposal("security_suspected")
-        data.update(severity="high", confidence="low", classification_reason="타 계정 데이터 노출 제보: 권한 검증 확인 필요")
-        data["solutions"][0].update(title="서버 권한 검사", description="합성 계정으로 문서 소유권 검사와 회귀 검증")
+    def test_visual_bug_gets_developer_queue_and_remediation(self):
+        data = proposal("visual")
+        data.update(severity="high", confidence="medium", classification_reason="화면 요소 겹침 제보")
+        data["solutions"][0].update(title="레이아웃 조정", description="화면 너비별 요소 겹침 여부 검증")
         result = AnalysisService(FakeModel(data)).analyze(report())
-        self.assertEqual(result.classification, "security_suspected")
-        self.assertEqual(result.review_queue, "security_review")
+        self.assertEqual(result.classification, "visual")
+        self.assertEqual(result.review_queue, "developer_review")
         self.assertEqual(result.assessment.severity, "high")
-        self.assertEqual(result.assessment.solutions[0].title, "서버 권한 검사")
-        self.assertIn("LOW_CLASSIFICATION_CONFIDENCE", result.review_reasons)
+        self.assertEqual(result.assessment.solutions[0].title, "레이아웃 조정")
+        self.assertIn("NO_REPRODUCTION_EVIDENCE", result.review_reasons)
 
-    def test_low_confidence_general_bug_requires_manual_review(self):
+    def test_low_confidence_functional_requires_manual_review(self):
         data = proposal()
         data["confidence"] = "low"
         result = AnalysisService(FakeModel(data)).analyze(report(), browser_run())
@@ -136,7 +136,7 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(AnalysisService(FakeModel(data)).analyze(report()).error_code, "MODEL_INVALID_OUTPUT")
 
     def test_invalid_json_output_and_size_are_handled(self):
-        for raw in ("not JSON", "```json\n{}\n```", '{"classification":"general_bug","classification":"needs_review"}',
+        for raw in ("not JSON", "```json\n{}\n```", '{"classification":"functional","classification":"needs_review"}',
                     '{"confidence": NaN}', "[" * 2000, "x" * 65537, "\ud800"):
             with self.subTest(raw=raw[:50]):
                 result = AnalysisService(FakeModel(raw=raw)).analyze(report())

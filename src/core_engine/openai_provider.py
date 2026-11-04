@@ -8,6 +8,7 @@ import re
 import ssl
 
 from .model import Generation, ModelError, TokenUsage, strict_json
+from .images import Screenshot
 
 
 class OpenAIModel:
@@ -31,8 +32,13 @@ class OpenAIModel:
         # Deliberately no default model and no automatic .env loading.
         return cls(api_key=os.environ.get("OPENAI_API_KEY", ""), model=os.environ.get("OPENAI_MODEL", ""))
 
-    def generate(self, *, instructions: str, context: dict, schema: dict) -> Generation:
-        body = json.dumps({
+    def generate(self, *, instructions: str, context: dict, schema: dict,
+                 images: tuple[Screenshot, ...] = ()) -> Generation:
+        if not isinstance(images, tuple) or len(images) > 3 or any(not isinstance(item, Screenshot) for item in images):
+            raise ValueError("images must contain at most three validated screenshots")
+        if sum(len(item.data) for item in images) > 8 * 1024 * 1024:
+            raise ValueError("image input exceeds 8 MiB")
+        request = {
             "model": self.model,
             "instructions": instructions,
             "input": [{"role": "user", "content": [{
@@ -42,9 +48,13 @@ class OpenAIModel:
                                 "strict": True, "schema": schema}},
             "max_output_tokens": self.max_output_tokens,
             "store": False,
-        }, ensure_ascii=True).encode("utf-8")
-        if len(body) > 128 * 1024:
+        }
+        if len(json.dumps(request, ensure_ascii=True).encode()) > 128 * 1024:
             raise ValueError("model input exceeds 128 KiB")
+        request["input"][0]["content"].extend(
+            {"type": "input_image", "image_url": item.data_url(), "detail": "high"} for item in images
+        )
+        body = json.dumps(request, ensure_ascii=True).encode("utf-8")
         connection = http.client.HTTPSConnection(
             "api.openai.com", timeout=self.timeout_seconds, context=ssl.create_default_context(),
         )

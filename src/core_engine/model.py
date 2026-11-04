@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import json
 from typing import Protocol
 
+from .images import Screenshot
+
 
 class ModelError(Exception):
     """Only stable codes may cross the provider boundary; never response bodies."""
@@ -34,7 +36,8 @@ class Generation:
 
 
 class JsonModel(Protocol):
-    def generate(self, *, instructions: str, context: dict, schema: dict) -> Generation:
+    def generate(self, *, instructions: str, context: dict, schema: dict,
+                 images: tuple[Screenshot, ...] = ()) -> Generation:
         """One bounded request. Raise ModelError on provider failures."""
         ...
 
