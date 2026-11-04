@@ -1,7 +1,7 @@
 """Read-only web target policy, adapted from IWANTGOHOME's web/program guards.
 
-This module makes policy decisions. The future browser transport must call
-``resolve_target`` for *every* request and connect to the returned numeric IP;
+This module makes policy decisions. The guarded browser transport calls
+``resolve_target`` for *every* request and connects to the returned numeric IP;
 checking a URL and then letting another client resolve it would reintroduce a
 DNS rebinding window.
 """
@@ -183,6 +183,8 @@ class RunPolicy:
         path = parsed.path
         if any(_path_matches(path, p) for p in self.excluded_path_prefixes):
             raise PolicyError("PATH_EXCLUDED")
+        if re.search(r"(?:^|/)(?:logout|signout|delete|remove|purchase|checkout|unsubscribe)(?:/|$)", path, re.I):
+            raise PolicyError("STATE_CHANGING_PATH")
         if not any(_path_matches(path, p) for p in self.allowed_path_prefixes):
             raise PolicyError("PATH_OUT_OF_SCOPE")
         return url

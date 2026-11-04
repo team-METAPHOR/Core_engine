@@ -59,6 +59,7 @@ class ScopeTests(unittest.TestCase):
             ("https://staging.example.test/app/logout/now", "GET", "PATH_EXCLUDED"),
             ("https://other.example.test/app", "GET", "ORIGIN_OUT_OF_SCOPE"),
             ("https://staging.example.test/app", "POST", "METHOD_NOT_ALLOWED"),
+            ("https://staging.example.test/app/delete", "GET", "STATE_CHANGING_PATH"),
         ):
             with self.subTest(value=value), self.assertRaises(PolicyError) as error:
                 p.check_url(value, method)
