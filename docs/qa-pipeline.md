@@ -55,7 +55,7 @@ options = BrowserOptions(
 
 1. **해석:** 원본 제보 이미지와 정제된 설명을 모델에 전달합니다. `observed_facts`, `hypotheses`, `expected_behavior`, `expectation_source`, `symptom_description`, `preconditions`, `questions`를 구분합니다.
 2. **페이지 관찰:** 승인된 URL을 새 브라우저에서 열어 최대 80개 요소와 마스킹된 화면을 수집합니다. 요소는 CSS 선택자·태그·이름·짧은 텍스트·활성화 상태를 포함합니다. 전체 DOM과 입력값은 보내지 않습니다.
-3. **계획:** 모델은 최대 20개 `navigate/click/fill/assert_text`와 `ready/expected/symptom` 조건을 생성합니다. 첫 URL은 백엔드에 등록된 입력으로 고정합니다. 다른 URL도 매번 범위를 검사합니다.
+3. **계획:** 현재 페이지와 원본 제보 이미지(있는 경우)를 구분해 모델에 전달합니다. 모델은 최대 20개 `navigate/click/fill/assert_text`와 `ready/expected/symptom` 조건을 생성합니다. 첫 URL은 백엔드에 등록된 입력으로 고정합니다. 다른 URL도 매번 범위를 검사합니다.
 4. **실행:** 동작 전후 화면을 저장합니다. 중간 완료는 `assert_text`, 최종 완료는 `ready`로 확인합니다. 새 컨텍스트·서버 초기화로 같은 계획을 두 번 실행합니다.
 5. **보정:** `STEP_OR_READINESS_FAILED`가 발생한 실제 조작 단계에 한해, 실패 시점 화면에 존재하는 선택자로 바꿀 수 있습니다. 동작·입력값·순서·최종 조건은 변경 불가입니다. 보정 후 이전 실행을 확정 근거로 합치지 않고 두 시도를 다시 실행합니다.
 6. **판정·보고:** 엔진이 판정한 결과를 모델에 전달해 원인 가설·해결 방향을 작성합니다. 모델 요약에 실패해도 이미 얻은 실행 결과는 보존됩니다. 코드 수정·패치·PR·개발자 알림은 수행하지 않습니다.
@@ -78,6 +78,8 @@ options = BrowserOptions(
 `other_selector`는 overlap 외에는 빈 문자열입니다. text/enabled/overlap/clipped의 대상이 없거나 여러 개면 판단을 보류합니다. 이 검사는 임의 픽셀 비교·드래그·iframe 내부 탐색·소스 코드 검사·성능 벤치마크를 수행하지 않습니다. 겹침과 넘침이 의도된 디자인인지 판단할 기준은 제보·제품 요구사항에서 제공해야 합니다.
 
 완료 조건 확인 뒤 `symptom=true, expected=false`일 때 증상 관찰, 그 반대는 정상 결과 관찰입니다. 둘 다 참이거나 둘 다 거짓이면 `ORACLE_AMBIGUOUS`로 보류합니다. 두 시도의 관찰이 일치해야 `reproduced` 또는 `not_reproduced`가 됩니다.
+
+AI 계획의 마지막 동작은 `navigate/fill/click`이어야 합니다. 마지막에 정상 결과를 `assert_text`로 강제하면 버그 화면에서는 판정 단계에 도달하지 못하므로 이러한 계획은 실행 전에 거절합니다. 최종 완료 신호는 `ready`, 정상·버그 결과는 `expected/symptom`에만 넣습니다. 중간 상태를 확인하는 `assert_text`는 계속 지원합니다.
 
 ## 결과·이벤트와 화면 연결
 
