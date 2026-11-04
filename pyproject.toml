@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metaphor-core-engine"
-version = "0.1.0"
-description = "Guarded validation primitives for authorized web bug reproduction"
+version = "0.2.0"
+description = "Screenshot-driven web QA reproduction and evidence reports"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["Pillow==13.0.0"]
 
 [project.optional-dependencies]
 browser = ["playwright==1.64.1"]

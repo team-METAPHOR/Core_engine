@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .policy import RunPolicy
+from .checks import Check
 
 
 @dataclass(frozen=True)
@@ -40,17 +41,22 @@ class Step:
 @dataclass(frozen=True)
 class BrowserPlan:
     steps: tuple[Step, ...]
-    ready: TextCheck
-    symptom: TextCheck
+    ready: TextCheck | Check
+    symptom: TextCheck | Check
     step_timeout_ms: int = 3000
+    expected: TextCheck | Check | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.steps, tuple) or not 1 <= len(self.steps) <= 20:
             raise ValueError("plan requires 1..20 immutable steps")
         if not all(isinstance(step, Step) for step in self.steps) or self.steps[0].action != "navigate":
             raise ValueError("plan must start with navigation")
-        if not isinstance(self.ready, TextCheck) or not isinstance(self.symptom, TextCheck):
+        if not isinstance(self.ready, (TextCheck, Check)) or not isinstance(self.symptom, (TextCheck, Check)):
             raise ValueError("readiness and symptom checks are required")
+        if self.expected is not None and not isinstance(self.expected, (TextCheck, Check)):
+            raise ValueError("invalid expected check")
+        if self.expected == self.symptom:
+            raise ValueError("expected and symptom checks must differ")
         if type(self.step_timeout_ms) is not int or not 100 <= self.step_timeout_ms <= 5000:
             raise ValueError("step timeout must be 100..5000 ms")
 

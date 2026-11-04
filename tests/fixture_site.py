@@ -25,7 +25,17 @@ def site():
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if self.path == "/app/large":
+            if self.path == "/app/privacy":
+                payload = b'''<!doctype html><div id="outer">public <span data-private id="private">customer-canary</span></div>
+<input id="password" type="password" value="password-canary"><input id="query" value="input-canary">
+<div id="email">private@example.com</div><button id="search">Search</button>
+<script>console.error('Authorization: Bearer console-canary');</script>'''
+            elif self.path in {"/app/visual", "/app/visual-fixed"}:
+                left = 150 if self.path.endswith("fixed") else 30
+                payload = (f'''<!doctype html><style>#a,#b {{ position:absolute;top:20px;width:100px;height:40px; }}
+#a {{left:10px}} #b {{left:{left}px}} #clip {{position:absolute;top:100px;left:0;width:20px;white-space:nowrap;overflow:hidden}}</style>
+<button id="a">First</button><button id="b">Second</button><div id="clip">overflowing content</div><div id="ready">done</div>''').encode()
+            elif self.path == "/app/large":
                 payload = b"x" * 2000
             elif self.path == "/app/truncated":
                 self.send_response(200)

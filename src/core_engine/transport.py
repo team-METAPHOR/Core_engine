@@ -26,10 +26,16 @@ class GuardedTransport:
         self, policy: RunPolicy, budget: RequestBudget,
         is_authorized: Callable[[], bool], cancelled: threading.Event,
         *, resolver: Callable = socket.getaddrinfo,
+        session_headers: dict[str, str] | None = None,
     ):
         self.policy, self.budget = policy, budget
         self.is_authorized, self.cancelled = is_authorized, cancelled
         self.resolver = resolver
+        self.session_headers = dict(session_headers or {})
+        if any(key not in {"Authorization", "Cookie"} or not isinstance(value, str)
+               or not 1 <= len(value) <= 4096 or any(ord(c) < 32 or ord(c) > 126 for c in value)
+               for key, value in self.session_headers.items()):
+            raise ValueError("only bounded trusted Authorization/Cookie session headers are supported")
         self.closed = threading.Event()
         self.connections: set[http.client.HTTPConnection] = set()
         self.lock = threading.Lock()
@@ -74,6 +80,7 @@ class GuardedTransport:
                 connection.request(method, path, headers={
                     "Accept-Encoding": "identity", "Connection": "close",
                     "User-Agent": "METAPHOR-Core/0.1", "Accept": "*/*",
+                    **self.session_headers,
                 })
                 response = connection.getresponse()
                 pairs = response.getheaders()
