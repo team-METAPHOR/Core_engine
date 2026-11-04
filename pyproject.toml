@@ -9,5 +9,8 @@ description = "Guarded validation primitives for authorized web bug reproduction
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+browser = ["playwright==1.64.1"]
+
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<title>검색 결과 재현 예제</title>
+<h1>검색 결과가 없을 때 이전 목록이 남는 버그</h1>
+<label>검색어 <input id="query"></label>
+<button id="search">검색</button>
+<div id="result">empty</div>
+<div id="ready">ready</div>
+<script>
+const fixed = new URLSearchParams(location.search).get('fixed') === '1';
+document.querySelector('#search').onclick = () => {
+  const query = document.querySelector('#query').value;
+  if (query === 'cat') document.querySelector('#result').textContent = 'cat';
+  else if (fixed) document.querySelector('#result').textContent = 'empty';
+  document.querySelector('#ready').textContent = 'done';
+};
+</script>
+</html>
