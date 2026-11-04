@@ -80,6 +80,16 @@ export OPENAI_MODEL="YOUR_SUPPORTED_MODEL_ID"
 python examples/qa_demo.py --live
 ```
 
+로컬에서 직접 작성한 `.env`를 사용할 때는 저장소 루트에서 명시적으로 불러옵니다. `.env`는 Git에서 제외되며 키를 문서나 코드에 넣지 않습니다.
+
+```bash
+chmod 600 .env
+set -a
+source .env
+set +a
+python examples/qa_demo.py --live --retest-fixed
+```
+
 기본 작업은 해석·계획·보고에 3회, 선택자 보정 시 최대 2회가 추가됩니다. 기본 모델 호출 상한은 작업당 6회이며 자동 HTTP 재시도는 없습니다. 이미지도 과금 대상입니다. 응답 저장 옵션은 `store=false`이지만 공급자의 전체 보존 정책을 대신하지 않습니다.
 
 유료 모델 호출은 자동 테스트에 포함하지 않습니다. 테스트는 프로토콜·흐름·실제 브라우저 결과를 검사하며, 모델의 분류 정확도·재현 계획 성공률·프롬프트 공격 저항성을 입증하지 않습니다.

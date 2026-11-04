@@ -66,14 +66,17 @@ def validate_output(value, schema: dict) -> None:
         for item in value:
             validate_output(item, schema["items"])
     elif kind == "string":
-        if type(value) is not str or (schema.get("minLength", 1) > 0 and not value.strip()):
-            raise ValueError("expected nonempty text")
+        if type(value) is not str:
+            raise ValueError("expected text")
         value.encode("utf-8")
         if "enum" in schema:
             if value not in schema["enum"]:
                 raise ValueError("invalid enum value")
-        elif not schema["minLength"] <= len(value) <= schema["maxLength"]:
-            raise ValueError("incorrect text length")
+        else:
+            if schema["minLength"] > 0 and not value.strip():
+                raise ValueError("expected nonempty text")
+            if not schema["minLength"] <= len(value) <= schema["maxLength"]:
+                raise ValueError("incorrect text length")
     elif kind == "null":
         if value is not None:
             raise ValueError("expected null")

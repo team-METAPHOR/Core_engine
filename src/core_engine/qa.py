@@ -244,9 +244,14 @@ class QAService:
                     snapshot = await runner.inspect(request.entry_url, reset=reset, is_authorized=is_authorized,
                                                     cancelled=cancelled, budget=budget)
                     self.store.event(job_id, "planning")
+                    images = (recorder.image(snapshot),)
+                    image_order = ["current_page"]
+                    if request.screenshot is not None:
+                        images += (request.screenshot,)
+                        image_order.append("reporter_screenshot")
                     generated = await calls.invoke("plan", PLAN_PROMPT,
                         {"entry_url": redact_text(request.entry_url), "intake": intake, "report": request.text(),
-                         "page": snapshot}, PLAN_SCHEMA, (recorder.image(snapshot),))
+                         "page": snapshot, "image_order": image_order}, PLAN_SCHEMA, images)
                     if generated["status"] == "needs_info" or generated["plan"] is None or generated["questions"]:
                         return finish("needs_info", questions=generated["questions"] or ["재현 순서와 완료 상태를 알려주세요."])
                     plan = decode_plan(generated["plan"], entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms)

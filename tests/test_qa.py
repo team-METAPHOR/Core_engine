@@ -42,6 +42,9 @@ class QATests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.status, 'completed', result)
             self.assertEqual(result.report['run']['verdict']['value'], 'reproduced')
             self.assertEqual([call['images'][0].sha256 for call in model.calls[:1]], [self.request(origin).screenshot.sha256])
+            self.assertEqual(model.calls[1]['context']['image_order'], ['current_page', 'reporter_screenshot'])
+            self.assertEqual(len(model.calls[1]['images']), 2)
+            self.assertEqual(model.calls[1]['images'][1].sha256, self.request(origin).screenshot.sha256)
             self.assertTrue(result.report['observations'])
             self.assertTrue(result.report['human_review_required'])
             self.assertEqual(len(model.calls), 3)
@@ -100,6 +103,39 @@ class QATests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.error_code, 'MODEL_INVALID_OUTPUT', result)
                 self.assertEqual(result.report['run']['verdict']['value'], 'inconclusive')
                 self.assertEqual(result.report['repairs'], [])
+
+    async def test_repair_stop_accepts_empty_target_and_preserves_report(self):
+        with site() as (origin, _, _):
+            repair = {'status': 'stop', 'target': '', 'reason': '동일한 조작 대상을 확인할 수 없음', 'questions': []}
+            model = ScriptedModel([intake(), plan(origin + '/app/mixed', True), repair, analysis()])
+            result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.status, 'inconclusive', result)
+            self.assertIsNone(result.error_code)
+            self.assertIsNotNone(result.report['analysis'])
+            self.assertEqual(result.report['repairs'], [])
+            self.assertEqual(len(model.calls), 4)
+
+    async def test_repair_needs_info_accepts_empty_target(self):
+        with site() as (origin, _, _):
+            repair = {'status': 'needs_info', 'target': '', 'reason': '검색 버튼 확인 필요',
+                      'questions': ['현재 검색 버튼을 알려주세요.']}
+            model = ScriptedModel([intake(), plan(origin + '/app/mixed', True), repair])
+            result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.status, 'needs_info', result)
+            self.assertIsNone(result.error_code)
+            self.assertEqual(result.questions, tuple(repair['questions']))
+            self.assertEqual(result.report['repairs'], [])
+
+    async def test_final_outcome_assertion_is_rejected_before_execution(self):
+        with site() as (origin, _, _):
+            data = plan(origin + '/app/mixed')
+            data['plan']['steps'].append({'action': 'assert_text', 'target': '#result', 'value': 'empty'})
+            model = ScriptedModel([intake(), data])
+            result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.error_code, 'INVALID_PLAN_OR_BASELINE', result)
+            self.assertIsNone(result.report['run'])
+            self.assertEqual(len(model.calls), 2)
+            self.assertEqual([s['phase'] for s in result.report['observations']], ['discovery'])
 
     async def test_ambiguous_oracle_is_inconclusive_and_not_replanned(self):
         with site() as (origin, _, _):

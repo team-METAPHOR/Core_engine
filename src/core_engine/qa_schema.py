@@ -45,6 +45,8 @@ def decode_plan(data: dict, *, entry_url=None, timeout_ms=3000) -> BrowserPlan:
                   for item in data["steps"])
     if any(item["value"] for item in data["steps"] if item["action"] in {"navigate", "click"}):
         raise ValueError("non-input action cannot carry a value")
+    if steps and steps[-1].action == "assert_text":
+        raise ValueError("final observations belong in ready/expected/symptom, not an assertion step")
     if entry_url is not None:
         if steps[0].action != "navigate":
             raise ValueError("first action must navigate")
@@ -76,11 +78,18 @@ Use observed_facts only for visible facts; hypotheses are tentative. Do not inve
 """
 PLAN_PROMPT = DATA_RULES + """
 Build one bounded, deterministic browser test from the interpreted report and current page snapshot.
+Images are ordered as indicated by image_order: the current page is the initial state, and the reporter
+screenshot (when supplied) shows the reported symptom. Use DOM boundaries to distinguish adjacent text;
+do not concatenate text from different elements into one selector's expected value.
 Use stable CSS selectors from the observed DOM where possible. No XPath, code, sleeps, random probing,
 security testing or destructive actions. Steps: navigate, fill, click, assert_text. At most 20 steps.
 The first action is navigate to the supplied entry_url (the host will enforce this).
 The ready check must prove the final action is complete, not just that the page loaded. For intermediate
-actions use assert_text to wait for completion. Do not equate loading or request failure with a bug.
+actions use assert_text to wait for completion. Prefer an explicit completion signal described in the
+report; the current snapshot's initial/loading text is not evidence of completion after the final action.
+The last step MUST be navigate, fill or click, never assert_text. Final outcome assertions belong ONLY
+in expected/symptom, so both buggy and corrected behavior can reach the observation stage. Readiness
+must be independent of which outcome occurs. Do not equate loading or request failure with a bug.
 Define BOTH expected and symptom predicates; exactly one must hold for a conclusive observation.
 Kinds: text equals inner text; visible/enabled uses true/false; count uses an integer string;
 overlap is visible bounding-box intersection (>1px) and requires other_selector; clipped detects viewport
