@@ -1,3 +1,4 @@
+import json
 import copy
 import unittest
 
@@ -101,3 +102,12 @@ class PlanContractTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RepairSchemaQuoteTests(unittest.TestCase):
+    def test_repair_schema_has_no_selector_literals(self):
+        # OpenAI strict mode rejects '"' inside enum literals; selectors must not become enum values.
+        from core_engine.qa_schema import repair_schema
+        schema = repair_schema(['[data-testid="apply-coupon"]', 'button:has-text("쿠폰 적용")'])
+        self.assertNotIn('"', ''.join(v for v in schema['properties']['target'].get('enum', [])))
+        self.assertNotIn('apply-coupon', json.dumps(schema))
