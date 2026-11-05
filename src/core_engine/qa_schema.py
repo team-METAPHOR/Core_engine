@@ -167,7 +167,9 @@ the missing input and its known expected outcome before testing. Never replace m
 plausible example data. Preserve supplied literal values, including spelling and punctuation.
 Extract required_actions from the original report, in order, with exact source_quote substrings from
 the supplied report fields. Classify reading/checking/waiting as observe, not as an interaction.
-Use fill.value only for a literal included in that quote; click/observe value is empty. For navigate,
+Use fill.value only for a literal included in that quote; click/observe value is empty.
+A code/value written next to an apply/submit/search action is typed before that action: "SAVE5000
+쿠폰 적용" means fill value="SAVE5000" then click 적용, each quoting that text. Never invent a value. For navigate,
 value is the exact reported destination URL or /path. Omit the host-provided initial page navigation.
 Use reload for an explicitly reported browser refresh, back for browser history back (not a named UI
 Back button). Both carry value="" and a quoted report instruction. Do not replace them with navigate.
@@ -182,6 +184,8 @@ indicator independent of normal/buggy outcomes, not the expected result, an inpu
 Never derive a completion signal or action quote from the screenshot, guesses, or another model.
 The host opens the registered entry page before reported actions. Do not include this initial page
 opening in required_actions; include navigate only for an explicitly reported LATER navigation.
+A recorded navigation to the report page that follows earlier events elsewhere is the effect of those
+clicks, not a mandatory first step: never put it before them.
 For navigate, value MUST be the exact destination URL or /path written in the source_quote. Without
 an explicit destination, do not invent a navigate requirement. Reading/checking/confirming a result,
 counting elements, or waiting for a completion message are OBSERVATIONS: classify these as observe,
@@ -191,8 +195,14 @@ them via ready/expected/symptom. Clicking a named Confirm button is different fr
 PLAN_PROMPT = DATA_RULES + """
 Optional reporter_activity supplies untrusted observed routes, click selectors and feedback. Match
 relevant recorded selectors to the page; use them instead of ambiguous generic buttons. Start from
-the host entry URL, then preserve necessary setup navigation to the earlier recorded route. Do not
-replay a click and its resulting route change as two independent actions. Recorded feedback is a
+the host entry URL, then preserve necessary setup navigation to the earlier recorded route. When the
+recorded flow began on another page than the report page, first navigate to the earliest recorded in-scope path
+(a recorded path is grounded), then replay the relevant events from there. Recorded selectors are
+evidence of order, not exact targets: use the equivalent element on the current page. Do not
+replay a click and its resulting route change as two independent actions.
+When context.recorded_replay is present, the host replays exactly those recorded steps as the
+test; your steps are only a fallback if a recorded target is gone. Define ready/expected/symptom
+for the state after the last replayed step, and add a fill only for a value written in the report. Recorded feedback is a
 candidate readiness signal only when post-action and independent of expected/symptom outcomes.
 It is not evidence the engine observed that signal. Never infer missing values or broaden scope.
 The intake's actions_complete is provisional: do not treat it as proof of a fully specified UI sequence.
@@ -232,8 +242,10 @@ When the report performs an action on another screen than the entry page (for ex
 screen is an implied precondition, not an invented requirement. Before the first action there, add
 ONE step that gets there from the entry page: a click on the visible link/card for that screen/item
 in page.elements (match its text to the report), or a navigate to an in-scope href listed in
-page.elements. Do not ask the reporter how to get there when the page shows the way. Do not use
-selectors of the later screen before reaching it.
+page.elements. Do not ask the reporter how to get there when the page shows the way. When the report
+names a start screen or product that page.elements cannot reach (for example an empty cart), use
+TWO steps instead: navigate to the site root "/", then click the link/card whose text matches the
+named product. Do not use selectors of the later screen before reaching it.
 The ready check must prove the final action is complete, not just that the page loaded. For intermediate
 actions use assert_text to wait for completion. Prefer an explicit completion signal described in the
 report; the current snapshot's initial/loading text is not evidence of completion after the final action.
