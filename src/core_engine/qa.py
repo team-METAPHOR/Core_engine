@@ -26,7 +26,7 @@ from .policy import PolicyError, RunPolicy, canonical_url
 from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PROMPT, PLAN_PROMPT,
                         PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, plain_questions, repair_schema)
 from .redaction import redact_text
-from .replay import compose, replay_contract, replay_steps
+from .replay import compose, keep_replayed_prefix, replay_contract, replay_steps
 from .reporting import render_report
 from .scenario_contract import ground_contract, planning_schema, confirm_contract, planner_contract
 from .diagnosis import build_diagnosis
@@ -533,8 +533,13 @@ class QAService:
                     if failure is None:
                         break
                     if fallback_plan is not None:
-                        # A recorded target is gone or changed: run the model's own validated plan instead.
+                        # A recorded target is gone or changed: keep the replayed steps that already
+                        # worked and take only the rest from the model's own validated plan.
+                        kept = keep_replayed_prefix(plan.steps, failure.completed_steps, fallback_plan.steps)
+                        if kept is not None:
+                            fallback_plan = replace(fallback_plan, steps=kept)
                         repairs.append({"kind": "replay_fallback", "step": failure.completed_steps,
+                                        "kept_steps": failure.completed_steps if kept is not None else 0,
                                         "from_plan": plan_digest(plan), "to_plan": plan_digest(fallback_plan)})
                         plan, fallback_plan = fallback_plan, None
                         continue

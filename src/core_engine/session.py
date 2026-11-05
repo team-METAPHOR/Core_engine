@@ -231,6 +231,7 @@ class GuardedPage:
                 if audit is not None:
                     audit["send_attempted"] = True
             arguments["on_send"] = sent
+            arguments["resource_type"] = route.request.resource_type
             task = asyncio.create_task(asyncio.to_thread(self.transport.fetch, route.request.url, route.request.method, **arguments))
             self.workers.add(task)
             response = await asyncio.shield(task)

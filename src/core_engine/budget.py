@@ -11,6 +11,8 @@ from typing import Callable, Iterator
 
 from .policy import PolicyError
 
+RATE_WINDOW_SECONDS = 60.0  # the per-minute window; module-level so tests can shorten it
+
 
 @dataclass(frozen=True)
 class BudgetLimits:
@@ -49,6 +51,9 @@ class RequestBudget:
         self.active = 0
         self.downloaded = 0
         self.recent: deque[float] = deque()
+        self.rate_waiters = 0
+        self.rate_wait_started = 0.0
+        self.rate_waited = 0.0
         self.lock = threading.Lock()
         self.available = threading.Condition(self.lock)
 
@@ -60,38 +65,70 @@ class RequestBudget:
         self.check_runtime()
         return max(0.001, self.limits.max_runtime_seconds - (self.clock() - self.started))
 
+    def rate_waited_seconds(self) -> float:
+        """Wall time during which at least one request was queued for the per-minute window."""
+        with self.lock:
+            return self.rate_waited + (self.clock() - self.rate_wait_started if self.rate_waiters else 0.0)
+
+    def _rate_wait(self, waiting: bool) -> None:
+        # Caller holds the lock. Overlapping waiters count once.
+        if waiting:
+            if not self.rate_waiters:
+                self.rate_wait_started = self.clock()
+            self.rate_waiters += 1
+        else:
+            self.rate_waiters -= 1
+            if not self.rate_waiters:
+                self.rate_waited += self.clock() - self.rate_wait_started
+
     @contextmanager
-    def request(self, *, wait: bool = False, check: Callable[[], None] | None = None) -> Iterator[None]:
-        while True:
-            # Host callbacks run outside the budget lock. Queued requests must still
-            # obey cancellation, authorization, runtime, rate and total limits.
-            if check:
-                check()
-            with self.available:
-                now = self.clock()
-                if now - self.started >= self.limits.max_runtime_seconds:
-                    raise PolicyError("RUNTIME_LIMIT")
-                while self.recent and self.recent[0] <= now - 60:
-                    self.recent.popleft()
-                if self.total >= self.limits.max_total_requests:
-                    raise PolicyError("REQUEST_LIMIT")
-                deadline = self.started + self.limits.max_runtime_seconds
-                if len(self.recent) >= self.limits.max_requests_per_minute:
-                    # A full per-minute window is a pacing delay, not a failure, when the oldest
-                    # request leaves the window before the runtime ends. Total stays a hard limit.
-                    release = self.recent[0] + 60
-                    if not wait or release >= deadline:
-                        raise PolicyError("RATE_LIMIT")
-                    self.available.wait(timeout=min(0.05, release - now))
-                    continue
-                if self.active < self.limits.max_concurrent_requests:
-                    self.total += 1
-                    self.active += 1
-                    self.recent.append(now)
-                    break
-                if not wait:
-                    raise PolicyError("CONCURRENCY_LIMIT")
-                self.available.wait(timeout=min(0.05, deadline - now))
+    def request(self, *, wait: bool = False, check: Callable[[], None] | None = None,
+                counted: bool = True) -> Iterator[None]:
+        """Admit one request. counted=False (same-origin static assets) skips the per-minute and
+        total request limits; concurrency, runtime and byte limits still apply."""
+        waiting = False
+        try:
+            while True:
+                # Host callbacks run outside the budget lock. Queued requests must still
+                # obey cancellation, authorization, runtime, rate and total limits.
+                if check:
+                    check()
+                with self.available:
+                    now = self.clock()
+                    if now - self.started >= self.limits.max_runtime_seconds:
+                        raise PolicyError("RUNTIME_LIMIT")
+                    while self.recent and self.recent[0] <= now - RATE_WINDOW_SECONDS:
+                        self.recent.popleft()
+                    if counted and self.total >= self.limits.max_total_requests:
+                        raise PolicyError("REQUEST_LIMIT")
+                    deadline = self.started + self.limits.max_runtime_seconds
+                    if counted and len(self.recent) >= self.limits.max_requests_per_minute:
+                        # A full per-minute window is a pacing delay, not a failure, when the oldest
+                        # request leaves the window before the runtime ends. Total stays a hard limit.
+                        release = self.recent[0] + RATE_WINDOW_SECONDS
+                        if not wait or release >= deadline:
+                            raise PolicyError("RATE_LIMIT")
+                        if not waiting:
+                            waiting = True
+                            self._rate_wait(True)
+                        self.available.wait(timeout=min(0.05, release - now))
+                        continue
+                    if waiting:
+                        waiting = False
+                        self._rate_wait(False)
+                    if self.active < self.limits.max_concurrent_requests:
+                        if counted:
+                            self.total += 1
+                            self.recent.append(now)
+                        self.active += 1
+                        break
+                    if not wait:
+                        raise PolicyError("CONCURRENCY_LIMIT")
+                    self.available.wait(timeout=min(0.05, deadline - now))
+        finally:
+            if waiting:
+                with self.available:
+                    self._rate_wait(False)
         try:
             yield
         finally:

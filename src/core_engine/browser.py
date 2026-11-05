@@ -53,7 +53,7 @@ class BrowserRun:
     evidence: tuple[Evidence, ...]
 
 
-async def _perform(session, step, timeout_ms):
+async def _perform_once(session, step, timeout_ms):
     from playwright.async_api import expect
 
     if step.action == "navigate":
@@ -63,16 +63,46 @@ async def _perform(session, step, timeout_ms):
     else:
         locator = session.page.locator("css=" + step.target)
         if step.action == "click":
-            await locator.click()
+            await locator.click(timeout=timeout_ms)
         elif step.action == "fill":
             # Credentials must come from trusted session setup, never model text.
-            if await locator.get_attribute("type") in {"password", "hidden"}:
+            if await locator.get_attribute("type", timeout=timeout_ms) in {"password", "hidden"}:
                 raise PolicyError("SENSITIVE_INPUT_UNSUPPORTED")
-            await locator.fill(step.value)
+            await locator.fill(step.value, timeout=timeout_ms)
         else:
             await expect(locator).to_have_text(step.value, timeout=timeout_ms, use_inner_text=True)
     session.check()
     session.transport.policy.check_url(session.page.url)
+
+
+async def _perform(session, step, timeout_ms):
+    """Run one step. Time a request spends queued for the per-minute window does not count against
+    the step timeout (the overall runtime still bounds it), and a target that is still missing gets
+    one more try after the page settles (network idle) before the step fails."""
+    from playwright.async_api import TimeoutError as BrowserTimeout
+
+    if step.action not in {"click", "fill", "assert_text"}:
+        return await _perform_once(session, step, timeout_ms)
+    budget = session.transport.budget
+    waited, settled, current = budget.rate_waited_seconds(), False, timeout_ms
+    while True:
+        try:
+            return await _perform_once(session, step, current)
+        except (BrowserTimeout, AssertionError):
+            session.check()
+            extra = budget.rate_waited_seconds() - waited
+            if extra > 0.01:
+                waited += extra
+                current = max(100, min(int(extra * 1000), int(budget.remaining_seconds() * 1000)))
+                continue
+            if settled:
+                raise
+            settled, current = True, timeout_ms
+            try:
+                await session.page.wait_for_load_state("networkidle", timeout=timeout_ms)
+            except BrowserTimeout:
+                pass
+            session.check()
 
 
 def plan_digest(plan):
@@ -284,7 +314,8 @@ class BrowserRunner:
                             snapshots.append(snapshot["id"])
                     mark("readiness")
                     try:
-                        await wait_for_check(session.page, plan.ready, plan.step_timeout_ms, session.check, session.network)
+                        await wait_for_check(session.page, plan.ready, plan.step_timeout_ms, session.check, session.network,
+                                             paused=transport.budget.rate_waited_seconds)
                         ready = True
                     except PolicyError as exc:
                         if exc.code != "STEP_OR_READINESS_FAILED" or plan.expected is None:

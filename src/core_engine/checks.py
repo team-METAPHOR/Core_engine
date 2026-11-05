@@ -105,8 +105,11 @@ async def observe_check(page, check, network=None) -> bool:
     return actual == (check.value == "true")
 
 
-async def wait_for_check(page, check, timeout_ms, guard, network=None):
+async def wait_for_check(page, check, timeout_ms, guard, network=None, paused=None):
+    """paused() is a monotonic count of seconds spent queued for the request-rate window;
+    that time extends the deadline (the caller's overall runtime limit still bounds it)."""
     deadline = time.monotonic() + timeout_ms / 1000
+    baseline = paused() if paused else 0.0
     while True:
         guard()
         try:
@@ -115,6 +118,6 @@ async def wait_for_check(page, check, timeout_ms, guard, network=None):
         except PolicyError as exc:
             if exc.code not in {"CHECK_TARGET_UNAVAILABLE", "CHECK_ATTRIBUTE_UNAVAILABLE", "RESPONSE_NOT_OBSERVED"}:
                 raise
-        if time.monotonic() >= deadline:
+        if time.monotonic() >= deadline + ((paused() - baseline) if paused else 0.0):
             raise PolicyError("STEP_OR_READINESS_FAILED")
         await asyncio.sleep(0.05)

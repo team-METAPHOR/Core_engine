@@ -13,6 +13,15 @@ from urllib.parse import urlsplit
 from .budget import RequestBudget
 from .policy import PolicyError, RunPolicy, STATE_CHANGING_METHODS, require_https_for_credentials
 
+# Same-origin page sub-resources that do not count against the request-rate and total budgets.
+# Documents, fetch/xhr and everything else still count; byte limits apply to all.
+STATIC_RESOURCE_TYPES = frozenset({"image", "font", "stylesheet", "script", "media"})
+
+
+def _origin(url: str) -> tuple[str, str]:
+    parts = urlsplit(url)
+    return parts.scheme.lower(), parts.netloc.lower()
+
 
 @dataclass(frozen=True)
 class Response:
@@ -63,7 +72,7 @@ class GuardedTransport:
 
     def fetch(self, url: str, method: str = "GET", *, browser_headers=None,
               login_body: bytes | None = None, request_body: bytes | None = None,
-              on_send: Callable[[], None] | None = None) -> Response:
+              on_send: Callable[[], None] | None = None, resource_type: str | None = None) -> Response:
         self.check()
         submitting = login_body is not None
         headers = dict(browser_headers or {})
@@ -86,7 +95,9 @@ class GuardedTransport:
             if request_body and headers.get("Content-Type", "").split(";", 1)[0].strip().lower() not in {
                 "application/json", "application/x-www-form-urlencoded"}:
                 raise PolicyError("UNSUPPORTED_REQUEST_CONTENT_TYPE")
-        with self.budget.request(wait=True, check=self.check):
+        counted = not (method == "GET" and not submitting and resource_type in STATIC_RESOURCE_TYPES
+                       and _origin(url) == _origin(self.policy.base_url))
+        with self.budget.request(wait=True, check=self.check, counted=counted):
             # Only the dedicated trusted login endpoint gets a one-shot POST exception.
             # URL scope, DNS pinning, authorization and budgets remain identical.
             self.check()
