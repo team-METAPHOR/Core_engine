@@ -36,6 +36,20 @@ def site(*, tls=False):
                 payload = (f'''<!doctype html><style>#a,#b {{ position:absolute;top:20px;width:100px;height:40px; }}
 #a {{left:10px}} #b {{left:{left}px}} #clip {{position:absolute;top:100px;left:0;width:20px;white-space:nowrap;overflow:hidden}}</style>
 <button id="a">First</button><button id="b">Second</button><div id="clip">overflowing content</div><div id="ready">done</div>''').encode()
+            elif self.path == "/app/shop":
+                # Entry page: product cards only; the add-to-cart button lives on the detail page.
+                payload = '''<!doctype html><meta charset="utf-8"><h1>BugLab 쇼핑</h1>
+<a id="notice" href="/app/notice">공지사항</a>
+<ul><li><a id="card-keyboard" href="/app/shop/keyboard">무선 키보드 39,000원</a></li>
+<li><a id="card-monitor" href="/app/shop/monitor">27인치 모니터 259,000원</a></li></ul>'''.encode()
+            elif self.path == "/app/shop/keyboard":
+                fixed = "true" if state["fixed"] else "false"
+                payload = f'''<!doctype html><meta charset="utf-8"><h1>무선 키보드</h1>
+<button id="add-to-cart">장바구니 담기</button><div id="cart-count">0</div><div id="cart-ready">대기</div>
+<script>document.querySelector('#add-to-cart').onclick = () => {{
+  document.querySelector('#cart-count').textContent = {fixed} ? '1' : '2';
+  document.querySelector('#cart-ready').textContent = '담김';
+}};</script>'''.encode()
             elif self.path == "/app/large":
                 payload = b"x" * 2000
             elif self.path == "/app/truncated":

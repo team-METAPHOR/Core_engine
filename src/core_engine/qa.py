@@ -24,13 +24,30 @@ from .plan import Step
 from .planning import PlanValidationError, validate_candidate
 from .policy import PolicyError, RunPolicy, canonical_url
 from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PROMPT, PLAN_PROMPT,
-                        PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, repair_schema)
+                        PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, plain_questions, repair_schema)
 from .redaction import redact_text
 from .reporting import render_report
 from .scenario_contract import ground_contract, planning_schema, confirm_contract, planner_contract
 from .diagnosis import build_diagnosis
 from .test_export import export_playwright_test, required_test_environment
 from .live import LiveStream
+
+
+def _words(text):
+    return {word for word in re.findall(r"[^\W\d_]{2,}", text.lower())}
+
+
+def _leads_toward(selector, snapshot, report):
+    """A navigation click must share report words and be the best-matching link/control on the page."""
+    reported = " ".join(report.values()).lower()
+
+    def score(element):
+        return sum(word in reported for word in _words(element["text"] + " " + element["name"]))
+    chosen = next(element for element in snapshot["elements"] if element["selector"] == selector)
+    rivals = [element for element in snapshot["elements"]
+              if (element["tag"] in {"a", "button"} or element["role"] in {"link", "button"})
+              and chosen["text"] not in element["text"] and element["text"] not in chosen["text"]]
+    return score(chosen) > 0 and all(score(element) <= score(chosen) for element in rivals)
 
 
 @dataclass(frozen=True)
@@ -240,6 +257,7 @@ class QAService:
         baseline_report = None
 
         def finish(status, *, questions=(), error=None):
+            questions = plain_questions(questions)
             plan_review["final_plan_sha256"] = plan_digest(plan) if plan else None
             classification = (analysis or intake or {}).get("classification", "needs_review")
             report = {
@@ -366,7 +384,10 @@ class QAService:
                         if not needs_info:
                             try:
                                 candidate = validate_candidate(generated["plan"], request.text(),
-                                    entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract)
+                                    entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract,
+                                    # The reached-screen heuristic only asks for a revision; the last
+                                    # proposal runs as-is and a runtime navigation repair can still help.
+                                    page=snapshot if proposal < self.limits.max_plan_revisions else None)
                                 self._validate_plan(candidate)
                                 contract = confirm_contract(candidate, contract)
                                 context = {**context, "scenario_contract": planner_contract(contract)}
@@ -458,8 +479,22 @@ class QAService:
                         {"intake": intake, "frozen_plan": encode_plan(plan), "failed_step_index": index,
                          "page": snapshot, "candidates": sorted(set(candidates))},
                         repair_schema(), (recorder.image(snapshot),))
-                    if repaired["status"] == "repair" and repaired["target"] not in set(candidates):
+                    if repaired["status"] in {"repair", "navigate_first"} and repaired["target"] not in set(candidates):
                         raise ModelError("MODEL_INVALID_OUTPUT")
+                    if repaired["status"] == "navigate_first":
+                        if len(plan.steps) >= 20:
+                            break
+                        if (repaired["questions"] or step.action != "click" or repaired["target"] == step.target
+                                or any(item.get("kind") == "navigation" for item in repairs)
+                                or not _leads_toward(repaired["target"], snapshot, request.text())):
+                            raise ModelError("MODEL_INVALID_OUTPUT")
+                        old_digest = plan_digest(plan)
+                        inserted = Step("click", repaired["target"])
+                        plan = replace(plan, steps=(*plan.steps[:index], inserted, *plan.steps[index:]))
+                        repairs.append({"kind": "navigation", "step": index, "inserted": {"action": "click", "target": inserted.target},
+                                        "reason": repaired["reason"], "from_plan": old_digest,
+                                        "to_plan": plan_digest(plan), "observation_id": snapshot["id"]})
+                        continue
                     if repaired["status"] == "needs_info":
                         return finish("needs_info", questions=repaired["questions"] or ["해당 조작 대상과 재현 순서를 확인해주세요."])
                     if repaired["status"] != "repair" or repaired["questions"] or not repaired["target"] or repaired["target"] == step.target:
