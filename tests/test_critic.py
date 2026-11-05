@@ -153,6 +153,22 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(contract['completeness_basis'], 'partial_reported_sequence')
             self.assertEqual(len(primary.calls), 3)
 
+    async def test_second_host_revision_fixes_duplicate_within_shared_six_calls(self):
+        with site() as (origin, _, _):
+            correct = plan(origin + '/app/mixed')
+            incomplete = copy.deepcopy(correct)
+            incomplete['plan']['steps'] = [incomplete['plan']['steps'][0], *incomplete['plan']['steps'][-2:]]
+            repeated = copy.deepcopy(correct)
+            repeated['plan']['steps'].append(copy.deepcopy(repeated['plan']['steps'][-1]))
+            primary = ScriptedModel([intake(), incomplete, repeated, correct, analysis()])
+            critic = ScriptedModel([review('revise')])
+            result = await self.service(primary, origin, critic).run(
+                self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced', result)
+            self.assertEqual(len(result.report['model_calls']), 6)
+            self.assertEqual(len(critic.calls), 1)
+            self.assertEqual(primary.calls[3]['context']['validation_feedback']['code'], 'PLAN_UNREPORTED_REPEAT')
+
     async def test_host_navigation_query_is_not_sent_to_either_model(self):
         with site() as (origin, _, _):
             marker = 'private-query-state'

@@ -156,12 +156,12 @@ class QATests(unittest.IsolatedAsyncioTestCase):
         with site() as (origin, _, _):
             invalid = plan(origin + '/app/mixed')
             invalid['plan']['steps'][4]['value'] = 'fabricated-query'
-            model = ScriptedModel([intake(), invalid, invalid])
+            model = ScriptedModel([intake(), invalid, invalid, invalid])
             result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.status, 'failed', result)
             self.assertEqual(result.error_code, 'INVALID_PLAN_OR_BASELINE')
-            self.assertEqual(len(model.calls), 3)
-            self.assertEqual(len(result.report['plan_validation']), 2)
+            self.assertEqual(len(model.calls), 4)
+            self.assertEqual(len(result.report['plan_validation']), 3)
             self.assertIsNone(result.report['run'])
             self.assertIsNone(result.report['scenario'])
             self.assertEqual([s['phase'] for s in result.report['observations']], ['discovery'])

@@ -69,7 +69,7 @@ class QALimits:
     max_repairs: int = 2
     max_runtime_seconds: int = 180
     max_reported_tokens: int = 40_000
-    max_plan_revisions: int = 1
+    max_plan_revisions: int = 2
 
     def __post_init__(self):
         for key, low, high in (("max_model_calls", 1, 10), ("max_repairs", 0, 2),
