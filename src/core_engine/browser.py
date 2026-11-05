@@ -60,6 +60,8 @@ class BrowserRunner:
         self.policy, self.limits = policy, limits
         self.options, self.recorder = options or BrowserOptions(), recorder
         self.expected_browser_version = expected_browser_version
+        if self.options.login:
+            self.options.login.validate_scope(self.policy)
 
     def _browser_metadata(self, browser):
         if self.expected_browser_version and browser.version != self.expected_browser_version:
@@ -69,7 +71,9 @@ class BrowserRunner:
 
     def _transport(self, is_authorized, cancelled, budget):
         return GuardedTransport(self.policy, budget or RequestBudget(self.limits), is_authorized,
-                                cancelled or threading.Event(), session_headers=self.options.session_headers)
+                                cancelled or threading.Event(), session_headers=self.options.session_headers,
+                                login_url=(self.policy.base_url.rstrip('/') + (self.options.login.submit_path or self.options.login.login_path))
+                                if self.options.login else None)
 
     async def inspect(self, url: str, *, reset, is_authorized, cancelled=None, budget=None) -> dict:
         """Fresh read-only observation for planning; reset(0) is the discovery pass."""
@@ -180,6 +184,8 @@ class BrowserRunner:
             timeline.append({"stage": name, "step_index": step_index,
                              "elapsed_seconds": round(time.monotonic() - started, 3)})
         try:
+            if self.options.login:
+                mark("login")
             async with session:
                 try:
                     for index, step in enumerate(plan.steps):

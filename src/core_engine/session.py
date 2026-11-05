@@ -5,10 +5,9 @@ from contextlib import asynccontextmanager
 import os
 import tempfile
 import time
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .policy import PolicyError
-from .redaction import redact_text
 
 
 @asynccontextmanager
@@ -69,6 +68,9 @@ class GuardedPage:
         self.observed_responses = frozenset(observed_responses)
         self.video = None
         self.attempt = attempt
+        self.login_in_progress = False
+        self.login_post_used = False
+        self.login_redirect_url = None
 
     def block(self, code):
         if not self.blocked:
@@ -96,6 +98,9 @@ class GuardedPage:
             self.page.on("console", self.console)
             self.page.on("download", lambda _: self.block("DOWNLOAD_UNSUPPORTED"))
             self.page.on("popup", lambda _: self.block("POPUP_UNSUPPORTED"))
+            if self.options.login:
+                from .login import perform_login
+                await perform_login(self)
             if self.options.record_video and self.recorder:
                 self.video = self.recorder.open_video(self)
             return self
@@ -118,21 +123,35 @@ class GuardedPage:
                 await asyncio.gather(*self.workers, return_exceptions=True)
 
     async def capture_video_frame(self):
+        from playwright.async_api import Error
+
         if self.page is None or self.page.url == "about:blank":
             return None
         self.transport.check()
         self.transport.policy.check_url(self.page.url)
-        image, _ = await self.recorder.masked_image(self.page)
+        try:
+            image, _ = await self.recorder.masked_image(self.page)
+        except Error as exc:
+            if "Execution context was destroyed" in str(exc):
+                # A navigation can replace the DOM between samples. Discard this
+                # frame and resume with a freshly masked frame on the next tick.
+                return None
+            raise
         return image
 
     def page_error(self, error):
+        if self.login_in_progress:
+            self.block("LOGIN_FAILED")
+            return
         self.block("PAGE_SCRIPT_ERROR")
         if len(self.errors) < 20:
-            self.errors.append({"type": "pageerror", "message": redact_text(str(error))[:300]})
+            self.errors.append({"type": "pageerror", "message": self.options.redact(str(error))[:300]})
 
     def console(self, message):
+        if self.login_in_progress:
+            return
         if message.type == "error" and len(self.errors) < 20:
-            self.errors.append({"type": "console", "message": redact_text(message.text)[:300]})
+            self.errors.append({"type": "console", "message": self.options.redact(message.text)[:300]})
 
     async def websocket(self, ws):
         self.block("WEBSOCKET_UNSUPPORTED")
@@ -142,23 +161,50 @@ class GuardedPage:
         from playwright.async_api import Error
 
         task = None
-        item = {"url": redact_text(route.request.url)[:2048], "method": route.request.method, "status": None, "blocker": None}
+        item = {"url": self.options.redact(route.request.url)[:2048], "method": route.request.method, "status": None, "blocker": None}
         item["elapsed_seconds"] = round(time.monotonic() - self.started, 3)
-        if len(self.network) < 120:
+        if not self.login_in_progress and len(self.network) < 120:
             self.network.append(item)
         try:
             self.check()
-            task = asyncio.create_task(asyncio.to_thread(self.transport.fetch, route.request.url, route.request.method))
+            arguments = {}
+            if self.options.login:
+                if self.options.login.password in unquote(route.request.url):
+                    raise PolicyError("LOGIN_FAILED")
+                raw = await route.request.all_headers()
+                names = {"cookie": "Cookie", "authorization": "Authorization"}
+                if self.login_in_progress and route.request.method == "POST":
+                    if self.login_post_used:
+                        raise PolicyError("LOGIN_FAILED")
+                    self.login_post_used = True
+                    names.update({"content-type": "Content-Type", "x-csrftoken": "X-CSRFToken",
+                                  "x-csrf-token": "X-CSRF-Token", "origin": "Origin", "referer": "Referer"})
+                    content_type = raw.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if content_type not in {"application/x-www-form-urlencoded", "application/json"}:
+                        raise PolicyError("LOGIN_FAILED")
+                    arguments["login_body"] = route.request.post_data_buffer or b""
+                arguments["browser_headers"] = {name: raw[key] for key, name in names.items() if key in raw}
+            task = asyncio.create_task(asyncio.to_thread(self.transport.fetch, route.request.url, route.request.method, **arguments))
             self.workers.add(task)
             response = await asyncio.shield(task)
             if self.options.response_delay_ms:
                 await asyncio.sleep(self.options.response_delay_ms / 1000)
             self.check()
             item["status"] = response.status
+            if self.login_in_progress and route.request.method == "POST" and response.status in {301, 302, 303}:
+                if not route.request.is_navigation_request():
+                    raise PolicyError("LOGIN_FAILED")
+                # Playwright does not intercept every hop of a native redirect chain.
+                # Finish the form response, import its cookies, then navigate explicitly
+                # through the guarded route rather than sending a browser-native hop.
+                self.login_redirect_url = response.headers["location"]
+                await route.fulfill(status=200, headers={k: v for k, v in response.headers.items() if k != "location"},
+                                    body=b"<!doctype html>")
+                return
             await route.fulfill(status=response.status, headers=response.headers, body=response.body)
             observed = (route.request.method, urlsplit(route.request.url).path, response.status) in self.observed_responses
             if response.status >= 400 and not observed:
-                self.block("HTTP_ERROR")
+                self.block("LOGIN_FAILED" if self.login_in_progress else "HTTP_ERROR")
         except PolicyError as exc:
             item["blocker"] = exc.code
             self.block(exc.code)
@@ -173,7 +219,8 @@ class GuardedPage:
     async def navigate(self, url):
         self.check()
         self.transport.policy.check_url(url)
-        response = await self.page.goto(url, wait_until="load", timeout=self.timeout_ms)
+        timeout = self.options.login.timeout_ms if self.login_in_progress else self.timeout_ms
+        response = await self.page.goto(url, wait_until="load", timeout=timeout)
         if response is None or response.status >= 400:
             raise PolicyError("NAVIGATION_FAILED")
         self.check()
