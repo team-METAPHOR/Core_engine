@@ -133,6 +133,10 @@ PYTHONPATH=src python -m core_engine.evaluation --live --repeats 3 --retest-fixe
 
 ## 백엔드 호출
 
+`0.8.0`의 선택 필드 `QARequest.reporter_activity`로 동의받은 SDK 최근 조작 단서를
+함께 전달할 수 있습니다. 기록된 클릭·경로·클릭 뒤 문구는 intake·계획·critic에서
+원문 인용 근거로 사용합니다. [전달 형식과 한계](docs/reporter-activity.md)를 참고하세요.
+
 ```python
 from pathlib import Path
 from core_engine import (

@@ -116,7 +116,7 @@ def approved(origin, *, writes=False):
 
 def cart_plan(origin):
     return BrowserPlan((Step('navigate', origin + '/app/cart'), Step('click', '#increase'),
-        Step('assert_text', '#result', '36000'), Step('click', '#decrease'), Step('assert_text', '#quantity', '1')),
+        Step('assert_text', '#result', '36000'), Step('click', '#decrease')),
         ready=TextCheck('#ready', 'done'), symptom=TextCheck('#result', '36000'), expected=TextCheck('#result', '18000'))
 
 
@@ -248,6 +248,7 @@ class ScheduledBrowserTests(unittest.IsolatedAsyncioTestCase):
                 state['fixed'] = fixed
                 result = await runner.run(cart_plan(origin), reset=StateReset('cart-reset', reset), is_authorized=lambda: True)
                 self.assertEqual(result.verdict.value, expected, result)
+                self.assertEqual(state['quantity'], 1)
                 for e in result.evidence:
                     self.assertEqual(len(e.state_changing_requests), 2)
                     self.assertTrue(all(r['send_attempted'] and r['status'] == 200 for r in e.state_changing_requests))
