@@ -23,6 +23,7 @@ class LoginOptions:
     submit_selector: str = 'button[type="submit"],button:not([type]),input[type="submit"]'
     submit_path: str | None = None
     timeout_ms: int = 10000
+    unauthenticated_paths: tuple[str, ...] = ()
 
     def __post_init__(self):
         for value, maximum in ((self.login_id, 320), (self.password, 1024)):
@@ -31,6 +32,12 @@ class LoginOptions:
             value.encode('utf-8')
         if type(self.timeout_ms) is not int or not 100 <= self.timeout_ms <= 15000:
             raise ValueError('login timeout must be 100..15000 ms')
+        if not isinstance(self.unauthenticated_paths, tuple) or len(self.unauthenticated_paths) > 8:
+            raise ValueError('invalid unauthenticated status paths')
+        for path in self.unauthenticated_paths:
+            if (not isinstance(path, str) or not path.startswith('/') or '?' in path
+                    or canonical_url('https://scope.invalid' + path) != 'https://scope.invalid' + path):
+                raise ValueError('invalid unauthenticated status path')
         if not self.success_path and not self.success_selector:
             raise ValueError('an explicit login success path or selector is required')
         for name in ('login_path', 'submit_path', 'success_path'):
@@ -51,16 +58,19 @@ class LoginOptions:
 
     def configuration(self):
         """Host configuration only; callers must not send this to a model."""
-        return {name: getattr(self, name) for name in (
+        config = {name: getattr(self, name) for name in (
             'login_path', 'success_path', 'success_selector', 'username_selector',
             'password_selector', 'submit_selector', 'submit_path', 'timeout_ms')}
+        if self.unauthenticated_paths:
+            config['unauthenticated_paths'] = list(self.unauthenticated_paths)
+        return config
 
     def fingerprint(self):
         return hashlib.sha256(json.dumps(self.configuration(), sort_keys=True).encode()).hexdigest()
 
     def validate_scope(self, policy):
         require_https_for_credentials(policy.base_url)
-        for path in (self.login_path, self.submit_path, self.success_path):
+        for path in (self.login_path, self.submit_path, self.success_path, *self.unauthenticated_paths):
             if path is not None:
                 policy.check_url(policy.base_url.rstrip('/') + path)
 
@@ -79,7 +89,7 @@ class LoginOptions:
 
 async def perform_login(session):
     """Runs once per fresh context; no model, screenshot, video or login logs."""
-    from playwright.async_api import Error
+    from playwright.async_api import Error, expect
 
     login = session.options.login
     login.validate_scope(session.transport.policy)
@@ -93,8 +103,10 @@ async def perform_login(session):
         password = session.page.locator('css=' + login.password_selector)
         submit = session.page.locator('css=' + login.submit_selector)
         for target in (username, password, submit):
-            if await target.count() != 1 or not await target.is_visible() or not await target.is_enabled():
+            await target.wait_for(state='visible', timeout=login.timeout_ms)
+            if await target.count() != 1:
                 raise PolicyError('LOGIN_FAILED')
+            await expect(target).to_be_enabled(timeout=login.timeout_ms)
         # Credentials are filled only into text/email and password controls selected by the host.
         if await username.get_attribute('type') not in (None, 'text', 'email'):
             raise PolicyError('LOGIN_FAILED')
@@ -119,7 +131,7 @@ async def perform_login(session):
         session.transport.policy.check_url(session.page.url)
         if not session.login_post_used:
             raise PolicyError('LOGIN_FAILED')
-    except (Error, PolicyError) as exc:
+    except (Error, PolicyError, AssertionError) as exc:
         if isinstance(exc, PolicyError) and exc.code in {
             'CANCELLED', 'AUTHORIZATION_REVOKED', 'AUTHORIZATION_UNAVAILABLE',
             'RUNTIME_LIMIT', 'REQUEST_LIMIT', 'RATE_LIMIT', 'CONCURRENCY_LIMIT',

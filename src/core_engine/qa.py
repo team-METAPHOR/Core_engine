@@ -237,6 +237,7 @@ class QAService:
                 "classification": classification, "human_review_required": True,
                 "scope_revision": self.policy.scope_revision,
                 "environment": {**self.options.public(), "browser_version": recorder.browser_version,
+                                "state_changes": self.policy.state_changes.public() if self.policy.state_changes else None,
                                 "login_profile_sha256": self.options.login.fingerprint() if self.options.login else None},
                 "intake": intake, "scenario": clean_tree(encode_plan(plan)) if plan else None,
                 "scenario_contract": contract,
@@ -266,7 +267,7 @@ class QAService:
                     report["test_export"] = {"status": "ready", "plan_sha256": plan_digest(plan),
                         "artifact": {"name": name, "sha256": hashlib.sha256(source).hexdigest(),
                                      "bytes": len(source), "mime_type": "text/plain"},
-                        "required_environment": required_test_environment(plan, self.options)}
+                        "required_environment": required_test_environment(plan, self.options, policy=self.policy)}
                 except (ValueError, OSError):
                     report["test_export"] = {"status": "failed", "artifact": None, "error_code": "TEST_EXPORT_FAILED"}
             report = clean_tree(report, self.options.redact)
@@ -303,6 +304,9 @@ class QAService:
                         raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
                     if baseline_report["environment"].get("response_delay_ms", 0) != self.options.response_delay_ms:
                         raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
+                    if baseline_report["environment"].get("state_changes") != (
+                            self.policy.state_changes.public() if self.policy.state_changes else None):
+                        raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
                     event("retesting", {"baseline_job_id": _baseline})
                 else:
                     event("interpreting")
@@ -336,7 +340,8 @@ class QAService:
                                "intake": {k: v for k, v in intake.items() if k not in {"required_actions", "actions_complete", "completion_signal"}},
                                "report": request.text(),
                                "page": snapshot, "image_order": image_order, "scenario_contract": planner_contract(contract),
-                               "environment": {**self.options.public(), "browser_version": recorder.browser_version}}
+                               "environment": {**self.options.public(), "browser_version": recorder.browser_version,
+                                   "state_changes": self.policy.state_changes.public() if self.policy.state_changes else None}}
                     proposal_schema = planning_schema(PLAN_SCHEMA, contract)
                     for proposal in range(self.limits.max_plan_revisions + 1):
                         generated = await calls.invoke("plan" if proposal == 0 else "plan_revision",

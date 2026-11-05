@@ -87,6 +87,16 @@ def render_report(report: dict) -> str:
             lines += [f"- 시도 {item['attempt']}: " + escape(
                 f"완료 {item['completed_steps']}단계 / 증상 {observed[item['symptom_observed']]} / "
                 f"기대 결과 {observed[item['expected_observed']]} / 차단 {item['blocker'] or '없음'} / 근거 {item['id']}")]
+    if run:
+        blocked = [(e['attempt'], r) for e in run['evidence'] for r in e.get('blocked_requests', [])]
+        changed = [(e['attempt'], r) for e in run['evidence'] for r in e.get('state_changing_requests', [])]
+        if blocked:
+            lines += ['', '## 차단한 범위 밖 리소스', '',
+                      '해당 요청은 차단했으며 차단한 환경에서 검증을 계속했습니다. 리소스 누락이 증상에 영향을 주는지 검토하세요.', '']
+            lines += ['- ' + escape(f"시도 {n}: {r['method']} {r['url']} · {r['resource_type']} · {r['blocker']}") for n, r in blocked]
+        if changed:
+            lines += ['', '## 승인된 상태 변경 요청', '', '요청 본문·쿠키·인증 헤더는 기록하지 않습니다.', '']
+            lines += ['- ' + escape(f"시도 {n}: {r['method']} {r['path']} · 전송 시도 {r['send_attempted']} · 응답 {r['status']} · 차단 {r['blocker'] or '없음'}") for n, r in changed]
     if analysis:
         lines += ['', '## 분석 및 해결 방향', '', escape(analysis['summary']), '',
                   '- 임시 영향도: ' + escape(analysis['severity']),

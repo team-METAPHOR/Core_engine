@@ -14,7 +14,8 @@ from .login import LoginOptions
 from .live import LiveMessage, LiveOptions, LiveStream
 from .qa import QALimits, QARequest, QAResult, QAService
 from .plan import BrowserPlan, Step, TextCheck
-from .policy import PolicyError, ResolvedTarget, RunPolicy, canonical_url
+from .policy import PolicyError, ResolvedTarget, RunPolicy, StateChangePolicy, canonical_url
+from .reset import StateReset
 from .verdict import AttemptResult, Verdict, judge_attempts
 from .test_export import export_playwright_test
 from .conditions import ConditionLimits, ConditionsResult, ConditionsService, TestCondition
@@ -53,6 +54,8 @@ __all__ = [
     "RequestBudget",
     "ResolvedTarget",
     "RunPolicy",
+    "StateChangePolicy",
+    "StateReset",
     "Step",
     "Solution",
     "TextCheck",

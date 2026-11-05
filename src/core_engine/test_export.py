@@ -10,7 +10,7 @@ from .plan import BrowserPlan, TextCheck
 from .redaction import redact_text
 
 
-def required_test_environment(plan, options):
+def required_test_environment(plan, options, *, policy=None):
     names = ["QA_RESET_MODULE"]
     names += ["QA_ENTRY_URL" if index == 0 else "QA_NAVIGATE_" + str(index)
               for index, step in enumerate(plan.steps) if step.action == "navigate" and urlsplit(step.target).query]
@@ -18,6 +18,8 @@ def required_test_environment(plan, options):
         names.append("QA_AUTHORIZATION or QA_COOKIE or QA_STORAGE_STATE")
     if options.login:
         names.extend(["QA_LOGIN_ID", "QA_LOGIN_PASSWORD"])
+    if policy and policy.state_changes:
+        names.append("QA_ALLOW_STATE_CHANGES")
     return names
 
 
@@ -46,10 +48,13 @@ def export_playwright_test(plan: BrowserPlan, *, policy, options=None, test_name
         return data
 
     data = {"steps": steps, "ready": encode(plan.ready), "expected": encode(plan.expected), "symptom": encode(plan.symptom),
-        "timeout": plan.step_timeout_ms, "browser": options.browser_name, "responseDelayMs": options.response_delay_ms,
+        "timeout": plan.step_timeout_ms, "navigationTimeout": options.navigation_timeout_ms,
+        "browser": options.browser_name, "responseDelayMs": options.response_delay_ms,
         "viewport": {"width": options.width, "height": options.height}, "sessionRequired": bool(options.session_headers),
         "allowedPaths": list(policy.allowed_path_prefixes), "excludedPaths": list(policy.excluded_path_prefixes),
         "methods": list(policy.allowed_methods), "navigationEnv": navigation_env,
+        "stateChanges": policy.state_changes.public() if policy.state_changes else None,
+        "approvedOrigin": policy.base_url.rstrip('/'),
         "login": options.login.configuration() if options.login else None}
     return ("// Generated from a validated scenario. Assert NORMAL behavior: buggy fails, fixed passes.\n"
             "// Run only in your approved test environment; configure a trusted reset hook.\n"
@@ -108,20 +113,27 @@ test(testName, async ({ browser }) => {
   const entry = new URL(process.env.QA_ENTRY_URL || scenario.steps[0].target);
   if (!['http:', 'https:'].includes(entry.protocol) || entry.username || entry.password) throw new Error('INVALID_ENTRY_URL');
   if ((scenario.sessionRequired || scenario.login) && entry.protocol !== 'https:') throw new Error('CREDENTIALS_REQUIRE_HTTPS');
+  const changes = scenario.stateChanges as null | { environment: string; reset_adapter_id: string; allowed_requests: string[][] };
+  if (changes && (entry.origin !== scenario.approvedOrigin
+      || process.env.QA_ALLOW_STATE_CHANGES !== changes.reset_adapter_id
+      || resetModule.adapterId !== changes.reset_adapter_id)) throw new Error('STATE_RESET_REQUIRED');
   const within = (path: string, prefix: string) => prefix === '/' || path === prefix || path.startsWith(prefix + '/');
+  const changing = (method: string) => ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
   const allowed = (value: string, method: string) => {
     const url = new URL(value);
     let path: string;
     try { path = decodeURIComponent(url.pathname); } catch { return false; }
-    return url.origin === entry.origin && scenario.methods.includes(method) && !url.username && !url.password
+    const permittedWrite = changes?.allowed_requests.some(([verb, prefix]) => verb === method && within(path, prefix));
+    return url.origin === entry.origin && (scenario.methods.includes(method) || permittedWrite) && !url.username && !url.password
       && !path.includes('\\') && !path.includes('//') && !path.split('/').some(x => x === '.' || x === '..')
-      && !/%/.test(path) && !/(?:^|\/)(?:logout|signout|delete|remove|purchase|checkout|unsubscribe)(?:\/|$)/i.test(path)
+      && !/%/.test(path) && (permittedWrite || !/(?:^|\/)(?:logout|signout|delete|remove|purchase|checkout|unsubscribe)(?:\/|$)/i.test(path))
       && ![...url.searchParams.keys()].some(k => /token|secret|pass|auth|session|cookie|action|delete|redirect|callback|url/i.test(k))
       && scenario.allowedPaths.some(prefix => within(path, prefix))
       && !scenario.excludedPaths.some(prefix => within(path, prefix));
   };
   const declaredErrors = [scenario.expected, scenario.symptom].filter(c => c.kind === 'response_status');
   const outcomes: any[] = [];
+  const requestAudit: any[] = [];
   for (const attempt of [1, 2]) {
     if (await reset(attempt) !== true) throw new Error('RESET_FAILED');
     const headers: Record<string, string> = {};
@@ -147,7 +159,22 @@ test(testName, async ({ browser }) => {
           blocker = 'LOGIN_FAILED'; await route.abort(); return;
         }
         if (!allowed(request.url(), loginPost ? 'GET' : request.method())) {
+          const url = new URL(request.url());
+          const scopeOnly = url.origin !== entry.origin
+            || !scenario.allowedPaths.some(prefix => within(url.pathname, prefix));
+          if (request.resourceType() !== 'document' && scopeOnly
+              && scenario.methods.includes(request.method())) {
+            requestAudit.push({ attempt, method: request.method(), url: url.origin + url.pathname,
+              resource_type: request.resourceType(), non_fatal: true, send_attempted: false });
+            await route.abort(); return;
+          }
           blocker = 'REQUEST_OUT_OF_SCOPE'; await route.abort(); return;
+        }
+        if (changes) {
+          const headers = await request.allHeaders();
+          if ((headers.cookie || headers.authorization) && new URL(request.url()).protocol !== 'https:') {
+            blocker = 'CREDENTIALS_REQUIRE_HTTPS'; await route.abort(); return;
+          }
         }
         if (loginPost) {
           loginPostUsed = true;
@@ -172,8 +199,19 @@ test(testName, async ({ browser }) => {
           } else await route.fulfill({ response });
           return;
         }
-        if (scenario.responseDelayMs || scenario.sessionRequired || scenario.login) {
+        if (changes && changing(request.method())) {
+          const contentType = (request.headers()['content-type'] || '').split(';')[0].trim().toLowerCase();
+          const body = request.postDataBuffer();
+          if (body && (body.length > 16384 || !['application/json', 'application/x-www-form-urlencoded'].includes(contentType))) {
+            blocker = 'INVALID_REQUEST_BODY'; await route.abort(); return;
+          }
+          requestAudit.push({ attempt, method: request.method(), path: new URL(request.url()).pathname, send_attempted: true });
+        }
+        if (scenario.responseDelayMs || scenario.sessionRequired || scenario.login || changes) {
           const response = await route.fetch({ maxRedirects: 0 });
+          if (changes && changing(request.method()) && [301, 302, 303, 307, 308].includes(response.status())) {
+            blocker = 'STATE_CHANGE_REDIRECT_UNSUPPORTED'; await route.abort(); return;
+          }
           if ((scenario.sessionRequired || scenario.login) && [301, 302, 303, 307, 308].includes(response.status())) {
             // Native redirect chains can bypass routing after their first hop.
             // Only the explicit login POST redirect above is supported with credentials.
@@ -195,15 +233,20 @@ test(testName, async ({ browser }) => {
       context.on('response', response => {
         const path = new URL(response.url()).pathname, method = response.request().method(), status = response.status();
         if (loggingIn) {
-          if (status >= 400 || (method === 'POST' && [307, 308].includes(status))) blocker = 'LOGIN_FAILED';
+          const probe = method === 'GET' && status === 401
+            && ['fetch', 'xhr'].includes(response.request().resourceType())
+            && ((scenario.login as any)?.unauthenticated_paths || []).includes(path);
+          if ((status >= 400 && !probe) || (method === 'POST' && [307, 308].includes(status))) blocker = 'LOGIN_FAILED';
           return;
         }
         responses.push({ path, method, status });
-        if (status >= 400 && !declaredErrors.some(c => c.selector === path && c.other_selector === method && Number(c.value) === status))
+        const clientError = response.request().resourceType() !== 'document' && status >= 400 && status < 500;
+        if (status >= 400 && !clientError && !declaredErrors.some(c => c.selector === path && c.other_selector === method && Number(c.value) === status))
           blocker = 'UNEXPECTED_HTTP_ERROR';
       });
       const page = await context.newPage();
       page.setDefaultTimeout(scenario.timeout);
+      page.setDefaultNavigationTimeout(scenario.navigationTimeout);
       page.on('pageerror', () => { blocker = 'PAGE_SCRIPT_ERROR'; });
       page.on('popup', () => { blocker = 'POPUP_UNSUPPORTED'; });
       page.on('download', () => { blocker = 'DOWNLOAD_UNSUPPORTED'; });
@@ -213,12 +256,14 @@ test(testName, async ({ browser }) => {
         loggingIn = true;
         try {
           page.setDefaultTimeout(auth.timeout_ms);
-          await page.goto(new URL(auth.login_path, entry.origin).href, { waitUntil: 'load' });
+          await page.goto(new URL(auth.login_path, entry.origin).href, { waitUntil: 'load', timeout: auth.timeout_ms });
           const username = page.locator('css=' + auth.username_selector);
           const secret = page.locator('css=' + auth.password_selector);
           const submit = page.locator('css=' + auth.submit_selector);
           for (const target of [username, secret, submit]) {
-            if (await target.count() !== 1 || !await target.isVisible() || !await target.isEnabled()) throw new Error('LOGIN_FAILED');
+            await target.waitFor({ state: 'visible', timeout: auth.timeout_ms });
+            if (await target.count() !== 1) throw new Error('LOGIN_FAILED');
+            await expect(target).toBeEnabled({ timeout: auth.timeout_ms });
           }
           if (![null, 'text', 'email'].includes(await username.getAttribute('type')) || await secret.getAttribute('type') !== 'password')
             throw new Error('LOGIN_FAILED');
@@ -227,7 +272,7 @@ test(testName, async ({ browser }) => {
           await secret.fill(password);
           guard();
           await submit.click();
-          if (loginRedirect) await page.goto(loginRedirect, { waitUntil: 'load' });
+          if (loginRedirect) await page.goto(loginRedirect, { waitUntil: 'load', timeout: auth.timeout_ms });
           if (auth.success_path) await page.waitForURL(url => url.origin === entry.origin && url.pathname === auth.success_path,
             { waitUntil: 'load', timeout: auth.timeout_ms });
           if (auth.success_selector) await page.locator('css=' + auth.success_selector).waitFor({ state: 'visible', timeout: auth.timeout_ms });
@@ -270,6 +315,7 @@ test(testName, async ({ browser }) => {
     } finally { await context.close(); }
   }
   await test.info().attach('observed-outcomes', { body: JSON.stringify(outcomes), contentType: 'application/json' });
+  await test.info().attach('request-audit', { body: JSON.stringify(requestAudit), contentType: 'application/json' });
   expect(outcomes).toEqual([{ attempt: 1, expected: true, symptom: false }, { attempt: 2, expected: true, symptom: false }]);
 });
 '''

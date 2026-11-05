@@ -42,12 +42,32 @@ class ExportTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which('node') and (JS / 'node_modules/@playwright/test/cli.js').is_file(),
                      'run npm ci --prefix tests/js for real TypeScript export verification')
 class ExecutedExportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_approved_writes_export_uses_named_reset_and_observes_bug_and_fix(self):
+        from test_request_scheduling import browser_site, approved, cart_plan
+        with browser_site() as (origin, state), tempfile.TemporaryDirectory() as temporary:
+            module = Path(temporary) / 'reset.mjs'
+            module.write_text('export const adapterId="cart-reset"; export async function reset() { '
+                + 'const response=await fetch(' + json.dumps(origin + '/reset') + ',{method:"POST"}); return response.ok; }')
+            source = export_playwright_test(cart_plan(origin), policy=approved(origin, writes=True))
+            code, missing = await self.execute(source)
+            self.assertEqual(code, 1)
+            self.assertIn('STATE_RESET_REQUIRED', json.dumps(missing))
+            self.assertEqual(state['hits'], [])
+            env = {'QA_RESET_MODULE': str(module), 'QA_ALLOW_STATE_CHANGES': 'cart-reset'}
+            code, buggy = await self.execute(source, extra_env=env)
+            self.assertEqual(code, 1, buggy)
+            self.assertIn('observed-outcomes', json.dumps(buggy))
+            state['fixed'] = True
+            code, fixed = await self.execute(source, extra_env=env)
+            self.assertEqual(code, 0, fixed)
+            self.assertEqual(state['round'], 4)
+
     async def execute(self, source, *, extra_env=None):
         with tempfile.TemporaryDirectory(prefix='export-', dir=JS) as temporary:
             root = Path(temporary)
             (root / 'scenario.spec.ts').write_text(source)
             env = {key: value for key, value in os.environ.items() if not key.startswith('QA_')}
-            env.update(QA_RESET_MODULE=str((JS / 'reset.mjs').resolve()), **(extra_env or {}))
+            env.update({'QA_RESET_MODULE': str((JS / 'reset.mjs').resolve()), **(extra_env or {})})
             # Trust exactly the temporary loopback certificate in this test browser.
             # Production exports never disable certificate validation.
             args = ['--ignore-certificate-errors-spki-list=' + env['METAPHOR_TEST_TLS_SPKI']] if env.get('METAPHOR_TEST_TLS_SPKI') else []

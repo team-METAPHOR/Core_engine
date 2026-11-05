@@ -10,6 +10,7 @@ from .analysis_schema import _array, _enum, _object, _text
 from .model import ModelError
 from .observation import BrowserOptions
 from .policy import PolicyError
+from .reset import bind_condition_reset
 from .qa import QAService, QALimits, _ModelCalls
 from .qa_schema import DATA_RULES
 from .redaction import redact_text
@@ -241,8 +242,7 @@ class ConditionsService:
                         options=condition.options, limits=replace(self.qa_limits, max_runtime_seconds=min(self.qa_limits.max_runtime_seconds, remaining)),
                         browser_limits=self.browser_limits)
 
-                    async def reset_condition(ordinal):
-                        return await reset(condition.id, ordinal)
+                    reset_condition = bind_condition_reset(self.policy, reset, condition.id)
 
                     before = time.monotonic()
                     row = {"condition_id": condition.id, "condition": condition.public(),
@@ -300,8 +300,7 @@ class ConditionsService:
         service = QAService(self.model, self.policy, self.store, reviewer=self.reviewer,
                             options=condition.options, limits=self.qa_limits, browser_limits=self.browser_limits)
 
-        async def reset_condition(ordinal):
-            return await reset(condition.id, ordinal)
+        reset_condition = bind_condition_reset(self.policy, reset, condition.id)
 
         return await service.retest(row["job_id"], reset=reset_condition, is_authorized=is_authorized, cancelled=cancelled, live=live)
 

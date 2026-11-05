@@ -17,6 +17,7 @@ from urllib.parse import parse_qsl, quote, unquote, urljoin, urlsplit, urlunspli
 
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _FORBIDDEN_QUERY_KEY = re.compile(
     r"token|secret|pass|auth|session|cookie|action|delete|redirect|callback|url", re.I
 )
@@ -123,6 +124,41 @@ class ResolvedTarget:
 
 
 @dataclass(frozen=True)
+class StateChangePolicy:
+    """Host approval for bounded writes to disposable test data, never model input."""
+
+    environment: str
+    reset_adapter_id: str
+    allowed_requests: tuple[tuple[str, str], ...]
+
+    def __post_init__(self):
+        if self.environment not in {"test", "staging"}:
+            raise PolicyError("TEST_ENVIRONMENT_REQUIRED")
+        if (not isinstance(self.reset_adapter_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", self.reset_adapter_id)
+                or self.reset_adapter_id.lower() in {"stateless", "none", "noop"}):
+            raise PolicyError("STATE_RESET_REQUIRED")
+        if not isinstance(self.allowed_requests, tuple) or not 1 <= len(self.allowed_requests) <= 32:
+            raise PolicyError("INVALID_STATE_CHANGE_POLICY")
+        rules = []
+        for rule in self.allowed_requests:
+            if not isinstance(rule, tuple) or len(rule) != 2 or rule[0] not in STATE_CHANGING_METHODS:
+                raise PolicyError("INVALID_STATE_CHANGE_POLICY")
+            path = _path_prefix(rule[1])
+            if path == "/":
+                raise PolicyError("INVALID_STATE_CHANGE_POLICY")
+            rules.append((rule[0], path))
+        object.__setattr__(self, "allowed_requests", tuple(sorted(set(rules))))
+
+    def permits(self, method, path):
+        return any(method == verb and _path_matches(path, prefix) for verb, prefix in self.allowed_requests)
+
+    def public(self):
+        return {"environment": self.environment, "reset_adapter_id": self.reset_adapter_id,
+                "allowed_requests": [list(rule) for rule in self.allowed_requests]}
+
+
+@dataclass(frozen=True)
 class RunPolicy:
     """Approved scope snapshot supplied by a trusted backend, never by a reporter."""
 
@@ -134,6 +170,7 @@ class RunPolicy:
     allowed_methods: tuple[str, ...] = ("GET", "HEAD", "OPTIONS")
     allow_private_targets: bool = False
     private_cidrs: tuple[str, ...] = ()
+    state_changes: StateChangePolicy | None = None
     _origin: tuple[str, str, int] = field(init=False, repr=False)
     _private_networks: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = field(
         init=False, repr=False
@@ -158,6 +195,13 @@ class RunPolicy:
         methods = tuple(sorted(set(self.allowed_methods)))
         if not methods or not set(methods) <= SAFE_METHODS:
             raise PolicyError("METHOD_NOT_ALLOWED")
+        if self.state_changes is not None:
+            if not isinstance(self.state_changes, StateChangePolicy):
+                raise PolicyError("INVALID_STATE_CHANGE_POLICY")
+            for _, prefix in self.state_changes.allowed_requests:
+                if (not any(_path_matches(prefix, p) for p in allowed)
+                        or any(_path_matches(prefix, p) or _path_matches(p, prefix) for p in excluded)):
+                    raise PolicyError("STATE_CHANGE_OUT_OF_SCOPE")
         if type(self.allow_private_targets) is not bool or (self.private_cidrs and not self.allow_private_targets):
             raise PolicyError("INVALID_PRIVATE_POLICY")
         try:
@@ -175,7 +219,8 @@ class RunPolicy:
         object.__setattr__(self, "_private_networks", networks)
 
     def check_url(self, value: str, method: str = "GET") -> str:
-        if method not in self.allowed_methods:
+        changing = method in STATE_CHANGING_METHODS and self.state_changes is not None
+        if method not in self.allowed_methods and not changing:
             raise PolicyError("METHOD_NOT_ALLOWED")
         url = canonical_url(value)
         parsed = urlsplit(url)
@@ -189,10 +234,12 @@ class RunPolicy:
         path = parsed.path
         if any(_path_matches(path, p) for p in self.excluded_path_prefixes):
             raise PolicyError("PATH_EXCLUDED")
-        if re.search(r"(?:^|/)(?:logout|signout|delete|remove|purchase|checkout|unsubscribe)(?:/|$)", path, re.I):
+        if not changing and re.search(r"(?:^|/)(?:logout|signout|delete|remove|purchase|checkout|unsubscribe)(?:/|$)", path, re.I):
             raise PolicyError("STATE_CHANGING_PATH")
         if not any(_path_matches(path, p) for p in self.allowed_path_prefixes):
             raise PolicyError("PATH_OUT_OF_SCOPE")
+        if changing and not self.state_changes.permits(method, path):
+            raise PolicyError("STATE_CHANGE_OUT_OF_SCOPE")
         return url
 
     def resolve_target(

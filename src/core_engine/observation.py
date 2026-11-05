@@ -28,6 +28,7 @@ class BrowserOptions:
     video_max_seconds: int = 60
     response_delay_ms: int = 0
     login: LoginOptions | None = field(default=None, repr=False, compare=False)
+    navigation_timeout_ms: int = 15000
 
     def __post_init__(self):
         if self.login is not None and not isinstance(self.login, LoginOptions):
@@ -48,6 +49,8 @@ class BrowserOptions:
             raise ValueError("invalid test context ID")
         if type(self.step_timeout_ms) is not int or not 100 <= self.step_timeout_ms <= 5000:
             raise ValueError("step timeout must be 100..5000 ms")
+        if type(self.navigation_timeout_ms) is not int or not 100 <= self.navigation_timeout_ms <= 30000:
+            raise ValueError("navigation timeout must be 100..30000 ms")
         if not isinstance(self.mask_selectors, tuple) or len(self.mask_selectors) > 30 or any(
             not isinstance(value, str) or not 1 <= len(value) <= 256 for value in self.mask_selectors
         ):
@@ -64,7 +67,8 @@ class BrowserOptions:
     def public(self):
         return {"width": self.width, "height": self.height, "app_version": self.app_version,
                 "test_context_id": self.test_context_id, "session_mode": "form_login" if self.login else "fixed_headers" if self.session_headers else "anonymous",
-                "browser_name": self.browser_name, "response_delay_ms": self.response_delay_ms}
+                "browser_name": self.browser_name, "response_delay_ms": self.response_delay_ms,
+                "navigation_timeout_ms": self.navigation_timeout_ms}
 
     def validate_scope(self, policy):
         if self.session_headers or self.login:

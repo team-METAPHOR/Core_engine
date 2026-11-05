@@ -11,7 +11,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .budget import RequestBudget
-from .policy import PolicyError, RunPolicy, require_https_for_credentials
+from .policy import PolicyError, RunPolicy, STATE_CHANGING_METHODS, require_https_for_credentials
 
 
 @dataclass(frozen=True)
@@ -61,51 +61,73 @@ class GuardedTransport:
             for connection in tuple(self.connections):
                 connection.close()
 
-    def fetch(self, url: str, method: str = "GET", *, browser_headers=None, login_body: bytes | None = None) -> Response:
+    def fetch(self, url: str, method: str = "GET", *, browser_headers=None,
+              login_body: bytes | None = None, request_body: bytes | None = None,
+              on_send: Callable[[], None] | None = None) -> Response:
         self.check()
+        submitting = login_body is not None
         headers = dict(browser_headers or {})
         if self.session_headers or self.login_url or headers.get("Authorization") or headers.get("Cookie") or login_body is not None:
             require_https_for_credentials(url)
+        self.policy.check_url(url, "GET" if submitting else method)
         allowed = {"Cookie", "Authorization", "Content-Type", "X-CSRFToken", "X-CSRF-Token", "Origin", "Referer"}
-        if headers and (self.login_url is None or any(
+        if headers and (not (self.login_url or self.policy.state_changes) or any(
             key not in allowed or not isinstance(value, str) or not 1 <= len(value) <= 4096
             or any(ord(c) < 32 or ord(c) > 126 for c in value) for key, value in headers.items())):
             raise PolicyError("INVALID_SESSION_HEADERS")
-        submitting = login_body is not None
         if submitting and (method != "POST" or self.login_url is None
                            or self.policy.check_url(url) != self.login_url
                            or not isinstance(login_body, bytes) or not 0 < len(login_body) <= 16384):
             raise PolicyError("LOGIN_FAILED")
-        with self.budget.request():
+        changing = method in STATE_CHANGING_METHODS and not submitting
+        if request_body is not None:
+            if not changing or submitting or not isinstance(request_body, bytes) or len(request_body) > 16384:
+                raise PolicyError("INVALID_REQUEST_BODY")
+            if request_body and headers.get("Content-Type", "").split(";", 1)[0].strip().lower() not in {
+                "application/json", "application/x-www-form-urlencoded"}:
+                raise PolicyError("UNSUPPORTED_REQUEST_CONTENT_TYPE")
+        with self.budget.request(wait=True, check=self.check):
             # Only the dedicated trusted login endpoint gets a one-shot POST exception.
             # URL scope, DNS pinning, authorization and budgets remain identical.
+            self.check()
             target = self.policy.resolve_target(url, "GET" if submitting else method, resolver=self.resolver)
             self.check()
             parsed = urlsplit(target.url)
             # HTTPConnection retains the original Host. Supplying its socket prevents
             # a second DNS lookup; TLS still verifies the original hostname.
-            connection = http.client.HTTPConnection(target.hostname, target.port, timeout=1)
+            def timeout():
+                return min(self.budget.limits.request_timeout_seconds, self.budget.remaining_seconds())
+            connection = http.client.HTTPConnection(target.hostname, target.port, timeout=timeout())
             raw = None
             response = None
             with self.lock:
                 self.connections.add(connection)
             try:
-                raw = socket.create_connection((target.address, target.port), timeout=1)
+                raw = socket.create_connection((target.address, target.port), timeout=timeout())
                 connection.sock = raw
                 if parsed.scheme == "https":
                     connection.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=target.hostname)
                 self.check()
+                connection.sock.settimeout(timeout())
                 path = parsed.path + ("?" + parsed.query if parsed.query else "")
-                connection.request(method, path, body=login_body, headers={
+                if on_send:
+                    on_send()
+                connection.request(method, path, body=login_body if submitting else request_body, headers={
                     "Accept-Encoding": "identity", "Connection": "close",
                     "User-Agent": "METAPHOR-Core/0.1", "Accept": "*/*",
                     **self.session_headers,
                     **headers,
                 })
+                connection.sock.settimeout(timeout())
+                response_socket = connection.sock
                 response = connection.getresponse()
                 pairs = response.getheaders()
                 headers = {key.lower(): value for key, value in pairs}
                 if response.status in {301, 302, 303, 307, 308}:
+                    if changing:
+                        # A native browser redirect can escape the guarded route or
+                        # resend a write body. Never let an approved write redirect.
+                        raise PolicyError("STATE_CHANGE_REDIRECT_UNSUPPORTED")
                     if "location" not in headers:
                         raise PolicyError("REDIRECT_WITHOUT_LOCATION")
                     if submitting and response.status in {307, 308}:
@@ -121,8 +143,10 @@ class GuardedTransport:
                         raise PolicyError("INVALID_CONTENT_LENGTH")
                     self.budget.check_response_size(int(declared))
                 chunks, size = [], 0
-                while method != "HEAD":
+                while method != "HEAD" and not response.isclosed():
                     self.check()
+                    # A long/streaming body cannot renew the overall job deadline.
+                    response_socket.settimeout(timeout())
                     chunk = response.read1(min(16384, self.budget.limits.max_response_bytes - size + 1))
                     if not chunk:
                         break
@@ -140,12 +164,15 @@ class GuardedTransport:
                 }
                 blocked.update(part.strip().lower() for part in headers.get("connection", "").split(","))
                 outgoing = {k: v for k, v in headers.items() if k not in blocked}
-                if self.login_url is not None:
+                if self.login_url is not None or self.policy.state_changes is not None:
                     cookies = [value for key, value in pairs if key.lower() == "set-cookie"]
                     if cookies:
                         # Playwright splits newline-separated Set-Cookie into distinct headers.
                         outgoing["set-cookie"] = "\n".join(cookies)
                 return Response(response.status, outgoing, b"".join(chunks))
+            except TimeoutError:
+                self.budget.check_runtime()
+                raise PolicyError("TRANSPORT_TIMEOUT") from None
             except (OSError, http.client.HTTPException):
                 raise PolicyError("TRANSPORT_ERROR") from None
             finally:

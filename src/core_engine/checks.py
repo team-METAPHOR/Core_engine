@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import time
 from urllib.parse import urlsplit
 
-from .policy import PolicyError, canonical_url
+from .policy import PolicyError, SAFE_METHODS, STATE_CHANGING_METHODS, canonical_url
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class Check:
         if not isinstance(self.other_selector, str) or len(self.other_selector) > 256:
             raise ValueError("invalid secondary selector")
         if self.kind == "response_status":
-            if self.other_selector not in {"GET", "HEAD", "OPTIONS"} or not self.value.isascii() or not self.value.isdigit() or not 100 <= int(self.value) <= 599:
+            if self.other_selector not in SAFE_METHODS | STATE_CHANGING_METHODS or not self.value.isascii() or not self.value.isdigit() or not 100 <= int(self.value) <= 599:
                 raise ValueError("response check needs an allowed method and HTTP status")
             if not self.selector.startswith("/") or "?" in self.selector or canonical_url("https://scope.invalid" + self.selector) != "https://scope.invalid" + self.selector:
                 raise ValueError("response check requires an exact canonical path")
