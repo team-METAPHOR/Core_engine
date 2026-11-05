@@ -263,6 +263,13 @@ and value=true/false (mixed only for pressed/checked). A missing attribute is in
 Use snapshot state_attributes as evidence of available state predicates. Other kinds require other_selector="".
 A text value is the short exact inner text of ONE element (at most 40 characters, such as "2" or
 "15,000원"), never a sentence describing the outcome ("수량이 증가하고 합계도 변경됨").
+Every attempt starts from a reset state, so numbers or labels seen in the reporter's own session (for
+example "2" items in their cart) are usually NOT what the reset page shows. When the report says a value
+should change/increase/decrease/apply/toggle but stays the same (quantity, total, discount, counter, label),
+use relative text checks on the SAME element instead of copying absolute values: expected is
+kind=text value="$changed" and symptom is kind=text value="$unchanged". They compare the element's text
+right after the final action with its text captured right before it. Use absolute values only when the
+report states the exact correct and wrong result for the reproduced state itself.
 Never use body/html/* for exact text checks or assert_text: use the specific observed status/price/row
 element. Exact equality of a short status against a whole page is not a completion signal. Do not
 invent a later page's selectors from the first screenshot; unsupported/missing targets need evidence.

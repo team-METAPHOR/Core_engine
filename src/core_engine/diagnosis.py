@@ -24,6 +24,7 @@ _REASONS = {
     "STEP_OR_READINESS_FAILED": ("execution_blocked", "조작 대상 또는 처리 완료 조건을 확인하지 못했습니다.", "재현 순서·선택자·완료 문구를 확인해주세요."),
     "CHECK_TARGET_UNAVAILABLE": ("execution_blocked", "결과를 확인할 화면 요소가 없거나 표시되지 않았습니다.", "권한과 화면 상태가 제보 당시 조건과 같은지 확인해주세요."),
     "AMBIGUOUS_CHECK_TARGET": ("execution_blocked", "검사 대상이 여러 개여서 결과를 하나로 결정하지 못했습니다.", "검사할 요소를 구분할 안정적인 선택자가 필요합니다."),
+    "RELATIVE_BASELINE_UNAVAILABLE": ("inconclusive", "마지막 조작 직전의 비교 기준 값을 확인하지 못했습니다.", "변경 여부를 비교할 요소가 마지막 클릭·입력 전에도 화면에 보이도록 단계를 구체화해주세요."),
     "ORACLE_AMBIGUOUS": ("inconclusive", "정상 조건과 증상 조건을 명확하게 구분하지 못했습니다.", "기대 결과와 증상을 서로 구분할 수 있게 구체화해주세요."),
     "HTTP_ERROR": ("environment_blocked", "실행 중 HTTP 오류 응답이 관찰되어 판정을 보류했습니다.", "관찰된 응답 코드와 테스트 서버 상태를 확인해주세요."),
     "NAVIGATION_FAILED": ("environment_blocked", "등록된 페이지로 정상 이동하지 못했습니다.", "접속 주소·인증·테스트 서버 상태를 확인해주세요."),
