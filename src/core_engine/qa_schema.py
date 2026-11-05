@@ -109,6 +109,8 @@ Return only schema-conforming Korean JSON. We perform ordinary web QA, not vulne
 Only describe what the supplied evidence establishes. Separate observed facts from hypotheses.
 """
 INTAKE_PROMPT = DATA_RULES + """
+The environment is trusted host configuration. Its viewport/browser/session are already configured,
+not missing UI actions. Do not ask how to set dimensions that match the supplied width/height.
 Interpret the reporter screenshot and optional description. A screenshot is a single moment: do not
 invent preceding actions, server responses or intent. Identify a concrete bug candidate and expected
 behavior. Use expectation_source=report only for an explicit claim in the supplied description or
@@ -147,6 +149,8 @@ never navigate or click. The host separates observations from executable require
 them via ready/expected/symptom. Clicking a named Confirm button is different from inspecting a result.
 """
 PLAN_PROMPT = DATA_RULES + """
+The environment is trusted host configuration applied to each fresh browser context. Matching
+viewport dimensions, browser and registered session do not need extra scenario actions or questions.
 Build one bounded, deterministic browser test from the interpreted report and current page snapshot.
 scenario_contract contains grounded report requirements. Preserve its completion signal and ordered
 actions. When actions_complete is true, do not add or drop interactions. A critique cannot override

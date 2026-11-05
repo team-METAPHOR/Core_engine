@@ -277,7 +277,8 @@ class QAService:
                 else:
                     self.store.event(job_id, "interpreting")
                     intake = await calls.invoke("intake", INTAKE_PROMPT,
-                        {"report": request.text(), "has_screenshot": request.screenshot is not None},
+                        {"report": request.text(), "has_screenshot": request.screenshot is not None,
+                         "environment": self.options.public()},
                         INTAKE_SCHEMA, (request.screenshot,) if request.screenshot else ())
                     if intake["status"] == "needs_info" or not intake["expected_behavior"].strip() or intake["expectation_source"] == "unknown":
                         return finish("needs_info", questions=intake["questions"] or ["이 화면에서 기대하는 정상 동작을 알려주세요."])
@@ -302,7 +303,8 @@ class QAService:
                         images += (request.screenshot,)
                         image_order.append("reporter_screenshot")
                     context = {"entry_url": redact_text(request.entry_url), "intake": intake, "report": request.text(),
-                               "page": snapshot, "image_order": image_order, "scenario_contract": contract}
+                               "page": snapshot, "image_order": image_order, "scenario_contract": contract,
+                               "environment": {**self.options.public(), "browser_version": recorder.browser_version}}
                     proposal_schema = planning_schema(PLAN_SCHEMA, contract)
                     for proposal in range(self.limits.max_plan_revisions + 1):
                         generated = await calls.invoke("plan" if proposal == 0 else "plan_revision",
@@ -331,7 +333,7 @@ class QAService:
                                 "proposal": generated, "validation_feedback": feedback})
                             try:
                                 review = await calls.invoke("plan_review", REVIEW_PROMPT,
-                                    review_context(request.text(), snapshot, generated, feedback), REVIEW_SCHEMA,
+                                    review_context(request.text(), snapshot, generated, feedback, context["environment"]), REVIEW_SCHEMA,
                                     model=self.reviewer)
                                 review = normalize_review(review)
                             except asyncio.CancelledError:

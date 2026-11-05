@@ -61,6 +61,15 @@ class CriticContractTests(unittest.TestCase):
         self.assertEqual(ignored, [unanchored])
         self.assertEqual(len(mixed['issues']), 3)
 
+    def test_host_environment_excludes_secrets_and_is_separate_from_page(self):
+        result = review_context({}, {'url': 'https://example.test', 'elements': []},
+            {'status': 'ready', 'questions': [], 'plan': {}}, None,
+            {'width': 1280, 'height': 800, 'browser_name': 'firefox', 'session_mode': 'fixed_headers',
+             'session_headers': {'Authorization': 'private'}, 'storage_state': 'private'})
+        self.assertEqual(result['environment'], {'width': 1280, 'height': 800, 'browser_name': 'firefox',
+                                                'session_mode': 'fixed_headers'})
+        self.assertNotIn('private', str(result))
+
 
 @unittest.skipUnless(importlib.util.find_spec('playwright'), 'install browser extra')
 class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -89,6 +98,8 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(before.report['plan_review']['reviewed_plan_sha256'], before.report['plan_sha256'])
             self.assertNotIn('images', critic.calls[0])
             self.assertNotIn('intake', critic.calls[0]['context'])
+            self.assertEqual(critic.calls[0]['context']['environment']['width'], 1280)
+            self.assertTrue(critic.calls[0]['context']['environment']['browser_version'])
             self.assertEqual([r['role'] for r in before.report['model_calls']], ['primary', 'primary', 'critic', 'primary'])
             state['fixed'] = True
             after = await service.retest(before.job_id, reset=reset, is_authorized=lambda: True)
