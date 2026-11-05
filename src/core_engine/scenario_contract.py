@@ -34,12 +34,12 @@ def ground_contract(intake, report):
             "completion_signal": signal}
 
 
-def confirm_contract(plan, contract):
+def confirm_contract(plan, contract, report=None):
     """An intake guess must not constrain the unseen UI's submission mechanics."""
     if contract.get("completeness_basis") != "provisional_before_page_plan":
         return contract
     complete = contract.get("reported_actions_complete", False) and contract_error(
-        plan, {**contract, "actions_complete": True}) is None
+        plan, {**contract, "actions_complete": True}, report) is None
     return {**contract, "actions_complete": complete,
             "completeness_basis": "intake_and_page_plan_agree" if complete else "partial_reported_sequence"}
 
@@ -78,7 +78,15 @@ def planning_schema(schema, contract):
     return result
 
 
-def contract_error(plan, contract):
+def _grounded_fill(actual, index, report):
+    """A reported literal (coupon/search code) typed right before a click is that click's precondition."""
+    step = actual[index]
+    following = actual[index + 1] if index + 1 < len(actual) else None
+    return bool(report and step.action == "fill" and step.value and following and following.action == "click"
+                and any(step.value.casefold() in text.casefold() for text in report.values()))
+
+
+def contract_error(plan, contract, report=None):
     if not contract:
         return None
     actual = [step for step in plan.steps[1:] if step.action != "assert_text"]
@@ -103,19 +111,58 @@ def contract_error(plan, contract):
     signal = contract["completion_signal"]
     if signal and (plan.ready.kind != "text" or plan.ready.value != signal["value"]):
         return "PLAN_REPORTED_COMPLETION_CHANGED", "ready"
-    if sum(step.action == "navigate" for step in actual) > sum(item["action"] == "navigate" for item in required):
+    activity = (report or {}).get("reporter_activity", "")
+    recorded = {urlsplit(token).path for token in activity.split() if token.startswith("/") and not token.startswith("//")}
+    origin = urlsplit(plan.steps[0].target)[:2]
+
+    def recorded_navigation(step):
+        # The reporter's recorded flow may start on another page than the report page; reaching it is a precondition.
+        parts = urlsplit(step.target)
+        return step.action == "navigate" and parts[:2] == origin and not parts.query and parts.path in recorded
+
+    def optional(item):
+        # A recorded route change is usually a click's effect, so it is not a mandatory step of its own.
+        return item["action"] == "navigate" and item["source_quote"] in activity and item["value"] in recorded
+
+    def matches(step, item):
+        if step.action == "navigate" and item["action"] == "navigate":
+            parts = urlsplit(step.target)
+            expected_url = parts.scheme + "://" + parts.netloc + item["value"] if item["value"].startswith("/") else item["value"]
+            return canonical_url(step.target) == canonical_url(expected_url)
+        return step.action == item["action"] and (step.action != "fill" or step.value == item["value"])
+
+    if sum(step.action == "navigate" and not recorded_navigation(step) for step in actual) > sum(
+            item["action"] == "navigate" for item in required):
         return "PLAN_UNSUPPORTED_NAVIGATION", "steps"
-    cursor = 0
-    for step in actual:
-        if cursor < len(required):
-            item = required[cursor]
-            same_value = step.action != "fill" or step.value == item["value"]
-            if step.action == "navigate" and item["action"] == "navigate":
-                parts = urlsplit(step.target)
-                expected_url = parts.scheme + "://" + parts.netloc + item["value"] if item["value"].startswith("/") else item["value"]
-                same_value = canonical_url(step.target) == canonical_url(expected_url)
-            if step.action == item["action"] and same_value:
-                cursor += 1
-    if cursor != len(required) or (contract["actions_complete"] and len(actual) != len(required)):
+    cursor, exempt, skipped = 0, 0, 0
+    for index, step in enumerate(actual):
+        if cursor < len(required) and required[cursor]["action"] == "click" and _grounded_fill(actual, index, report):
+            # Exempt only from the reported sequence; the value is still checked verbatim by planning.
+            value = step.value.casefold()
+            pair = required[cursor:cursor + 2]
+            if len(pair) == 2 and all(item["action"] == "click" and value in item["source_quote"].casefold() for item in pair):
+                cursor += 1  # intake split "<code> 적용" into two clicks; the typed code is the first
+            else:
+                exempt += 1
+            continue
+        if cursor >= len(required):
+            continue
+        if matches(step, required[cursor]):
+            cursor += 1
+            continue
+        if recorded_navigation(step):
+            exempt += 1
+            continue
+        if step.action == "navigate":
+            break  # an unrecorded destination never stands in for a reported step
+        ahead = cursor
+        while ahead < len(required) and optional(required[ahead]) and not matches(step, required[ahead]):
+            ahead += 1
+        if ahead > cursor and ahead < len(required) and matches(step, required[ahead]):
+            skipped += ahead - cursor
+            cursor = ahead + 1
+    while cursor < len(required) and optional(required[cursor]):
+        cursor, skipped = cursor + 1, skipped + 1
+    if cursor != len(required) or (contract["actions_complete"] and len(actual) - exempt != len(required) - skipped):
         return "PLAN_REPORTED_SEQUENCE_CHANGED", "steps"
     return None

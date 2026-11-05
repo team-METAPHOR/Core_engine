@@ -26,6 +26,7 @@ from .policy import PolicyError, RunPolicy, canonical_url
 from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PROMPT, PLAN_PROMPT,
                         PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, plain_questions, repair_schema)
 from .redaction import redact_text
+from .replay import compose, replay_contract, replay_steps
 from .reporting import render_report
 from .scenario_contract import ground_contract, planning_schema, confirm_contract, planner_contract
 from .diagnosis import build_diagnosis
@@ -255,6 +256,7 @@ class QAService:
                        "review": None, "reviewed_plan_sha256": None, "final_plan_sha256": None,
                        "error_code": None}
         baseline_report = None
+        fallback_plan = None
 
         def finish(status, *, questions=(), error=None):
             questions = plain_questions(questions)
@@ -373,6 +375,10 @@ class QAService:
                                "environment": {**self.options.public(), "browser_version": recorder.browser_version,
                                    "state_changes": self.policy.state_changes.public() if self.policy.state_changes else None}}
                     proposal_schema = planning_schema(PLAN_SCHEMA, contract)
+                    recorded = replay_steps(request.reporter_activity, request.entry_url, self.policy)
+                    if recorded:
+                        # The host replays the recording; the model supplies checks and grounded fills only.
+                        context["recorded_replay"] = [{key: step[key] for key in ("action", "target")} for step in recorded]
                     for proposal in range(self.limits.max_plan_revisions + 1):
                         generated = await calls.invoke("plan" if proposal == 0 else "plan_revision",
                                                        PLAN_PROMPT if proposal == 0 else PLAN_REVISION_PROMPT,
@@ -383,15 +389,27 @@ class QAService:
                         candidate, feedback = None, None
                         if not needs_info:
                             try:
-                                candidate = validate_candidate(generated["plan"], request.text(),
-                                    entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract,
-                                    # The reached-screen heuristic only asks for a revision; the last
-                                    # proposal runs as-is and a runtime navigation repair can still help.
-                                    page=snapshot if proposal < self.limits.max_plan_revisions else None)
-                                self._validate_plan(candidate)
-                                contract = confirm_contract(candidate, contract)
-                                context = {**context, "scenario_contract": planner_contract(contract)}
-                                proposal_schema = planning_schema(PLAN_SCHEMA, contract)
+                                if recorded:
+                                    candidate = validate_candidate(compose(generated["plan"], recorded, request.entry_url),
+                                        request.text(), entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms,
+                                        contract=replay_contract(recorded, contract))
+                                    self._validate_plan(candidate)
+                                    try:  # the model's own plan is the runtime fallback when a recorded target is gone
+                                        fallback_plan = validate_candidate(generated["plan"], request.text(),
+                                            entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract)
+                                        self._validate_plan(fallback_plan)
+                                    except (PlanValidationError, ValueError):
+                                        fallback_plan = None
+                                else:
+                                    candidate = validate_candidate(generated["plan"], request.text(),
+                                        entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract,
+                                        # The reached-screen heuristic only asks for a revision; the last
+                                        # proposal runs as-is and a runtime navigation repair can still help.
+                                        page=snapshot if proposal < self.limits.max_plan_revisions else None)
+                                    self._validate_plan(candidate)
+                                    contract = confirm_contract(candidate, contract, request.text())
+                                    context = {**context, "scenario_contract": planner_contract(contract)}
+                                    proposal_schema = planning_schema(PLAN_SCHEMA, contract)
                             except PlanValidationError as exc:
                                 diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field}
                                 plan_validation.append(diagnostic)
@@ -462,6 +480,12 @@ class QAService:
                                     and ev.completed_steps < len(plan.steps)), None)
                     if failure is None:
                         break
+                    if fallback_plan is not None:
+                        # A recorded target is gone or changed: run the model's own validated plan instead.
+                        repairs.append({"kind": "replay_fallback", "step": failure.completed_steps,
+                                        "from_plan": plan_digest(plan), "to_plan": plan_digest(fallback_plan)})
+                        plan, fallback_plan = fallback_plan, None
+                        continue
                     index = failure.completed_steps
                     step = plan.steps[index]
                     if step.action not in {"click", "fill", "assert_text"}:

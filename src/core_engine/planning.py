@@ -8,7 +8,8 @@ from .qa_schema import decode_plan
 from .scenario_contract import contract_error
 
 # A report that names another screen ("상품 페이지에서", "상세 화면에서", "on the cart page").
-SCREEN_MENTION = re.compile(r"(페이지|화면|상세|탭)\s*(에서|으로|로|에)|\b(on|from|in) the [\w -]{1,40}(page|screen)\b", re.I)
+SCREEN_MENTION = re.compile(r"(페이지|화면|상세|탭)\s*(에서|으로|로|에)|시작\s*(화면|페이지)|상품\s*상세"
+                            r"|\b(on|from|in) the [\w -]{1,40}(page|screen)\b|\bstart(ing)? (page|screen)\b", re.I)
 
 
 FEEDBACK = {
@@ -21,7 +22,7 @@ FEEDBACK = {
     "PLAN_UNSUPPORTED_NAVIGATION": "Remove navigation/reload/back after the initial entry unless it is explicitly grounded in the reported required_actions. It can reset the state under test.",
     "PLAN_OVERBROAD_TEXT_TARGET": "Exact text equality against body/html/* is not a targeted assertion. Select the observed status/price/row element without changing the expected text or meaning.",
     "PLAN_UNSUPPORTED_RESPONSE_CHECK": "A response_status path/status must be explicitly supplied in the report/test_data; do not invent an endpoint or HTTP result.",
-    "PLAN_SCREEN_NOT_REACHED": "The report acts on another screen, but the first interaction target is not on the entry page. Before it, add ONE click on the visible link/card for that screen/item from page.elements, or navigate to an in-scope href listed in page.elements.",
+    "PLAN_SCREEN_NOT_REACHED": "The report acts on another screen, but the first interaction target is not on the entry page. Before it, add ONE click on the visible link/card for that screen/item from page.elements, or navigate to an in-scope href listed in page.elements. When page.elements shows no way there, navigate to the site root \"/\" and click the link/card whose text matches the named item.",
     "PLAN_UNREPORTED_REPEAT": "Do not duplicate the final trigger in both setup_steps and final_action. Consecutive identical interactions require explicitly repeated required_actions from the report.",
 }
 
@@ -43,13 +44,24 @@ def _seen_link(step, entry_url, page):
         element.get("href") and element["href"] == target.path for element in page["elements"])
 
 
+def _root_hop(steps, entry_url):
+    """Site root, then a click on the named item: the 2-hop way to a start screen the entry page cannot reach."""
+    if len(steps) < 4 or steps[1].action != "navigate" or steps[2].action != "click":
+        return False
+    target, entry = urlsplit(steps[1].target), urlsplit(entry_url)
+    return (target.scheme, target.netloc) == (entry.scheme, entry.netloc) and target.path in {"", "/"} and not target.query
+
+
 def _reaches_screen(plan, report, entry_url, page):
     """Return the plan without its implied navigation precondition, or raise when the screen is never reached."""
+    steps = list(plan.steps)
+    mentioned = any(SCREEN_MENTION.search(text) for text in report.values())
+    if mentioned and _root_hop(steps, entry_url):
+        # Exempt only from the reported sequence/navigation counts; the root is still scope-checked by the policy.
+        return replace(plan, steps=(steps[0], *steps[3:]))
     if not page:
         return plan
-    steps = list(plan.steps)
     selectors = {element["selector"] for element in page["elements"]}
-    mentioned = any(SCREEN_MENTION.search(text) for text in report.values())
     if len(steps) > 2 and (_seen_link(steps[1], entry_url, page) or (
             mentioned and steps[1].action == "click" and steps[1].target in selectors
             and steps[2].action != "navigate" and steps[2].target not in selectors)):
@@ -75,7 +87,7 @@ def validate_candidate(data, report, *, entry_url, timeout_ms, contract=None, pa
         raise PlanValidationError("PLAN_INVALID_CONTRACT") from None
     if plan.ready in (plan.expected, plan.symptom):
         raise PlanValidationError("PLAN_READINESS_IS_OUTCOME", "ready")
-    violation = contract_error(_reaches_screen(plan, report, entry_url, page), contract)
+    violation = contract_error(_reaches_screen(plan, report, entry_url, page), contract, report)
     if violation:
         raise PlanValidationError(*violation)
     supplied = tuple(report.values())
