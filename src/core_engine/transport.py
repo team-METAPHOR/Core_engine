@@ -11,7 +11,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .budget import RequestBudget
-from .policy import PolicyError, RunPolicy
+from .policy import PolicyError, RunPolicy, require_https_for_credentials
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,8 @@ class GuardedTransport:
                or not 1 <= len(value) <= 4096 or any(ord(c) < 32 or ord(c) > 126 for c in value)
                for key, value in self.session_headers.items()):
             raise ValueError("only bounded trusted Authorization/Cookie session headers are supported")
+        if self.session_headers or self.login_url:
+            require_https_for_credentials(self.policy.base_url)
         self.closed = threading.Event()
         self.connections: set[http.client.HTTPConnection] = set()
         self.lock = threading.Lock()
@@ -62,6 +64,8 @@ class GuardedTransport:
     def fetch(self, url: str, method: str = "GET", *, browser_headers=None, login_body: bytes | None = None) -> Response:
         self.check()
         headers = dict(browser_headers or {})
+        if self.session_headers or self.login_url or headers.get("Authorization") or headers.get("Cookie") or login_body is not None:
+            require_https_for_credentials(url)
         allowed = {"Cookie", "Authorization", "Content-Type", "X-CSRFToken", "X-CSRF-Token", "Origin", "Referer"}
         if headers and (self.login_url is None or any(
             key not in allowed or not isinstance(value, str) or not 1 <= len(value) <= 4096

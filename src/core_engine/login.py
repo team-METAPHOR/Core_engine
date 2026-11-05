@@ -7,7 +7,7 @@ import json
 import re
 from urllib.parse import quote, quote_plus, urlsplit
 
-from .policy import PolicyError, canonical_url
+from .policy import PolicyError, canonical_url, require_https_for_credentials
 from .redaction import redact_text
 
 
@@ -59,6 +59,7 @@ class LoginOptions:
         return hashlib.sha256(json.dumps(self.configuration(), sort_keys=True).encode()).hexdigest()
 
     def validate_scope(self, policy):
+        require_https_for_credentials(policy.base_url)
         for path in (self.login_path, self.submit_path, self.success_path):
             if path is not None:
                 policy.check_url(policy.base_url.rstrip('/') + path)
@@ -122,7 +123,7 @@ async def perform_login(session):
         if isinstance(exc, PolicyError) and exc.code in {
             'CANCELLED', 'AUTHORIZATION_REVOKED', 'AUTHORIZATION_UNAVAILABLE',
             'RUNTIME_LIMIT', 'REQUEST_LIMIT', 'RATE_LIMIT', 'CONCURRENCY_LIMIT',
-            'RESPONSE_LIMIT', 'DOWNLOAD_LIMIT'}:
+            'RESPONSE_LIMIT', 'DOWNLOAD_LIMIT', 'CREDENTIALS_REQUIRE_HTTPS'}:
             raise
         raise PolicyError('LOGIN_FAILED') from None
     finally:

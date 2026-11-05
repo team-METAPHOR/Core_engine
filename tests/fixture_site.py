@@ -1,10 +1,11 @@
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
+from core_engine.evaluation.local_tls import local_https
 
 
 @contextmanager
-def site():
+def site(*, tls=False):
     hits = []
     state = {"fixed": False}
 
@@ -21,7 +22,7 @@ def site():
             hits.append(("GET", self.path, self.headers.get("Host")))
             if self.path == "/app/redirect":
                 self.send_response(302)
-                self.send_header("Location", "/outside")
+                self.send_header("Location", state.get("redirect_location", "/outside"))
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
@@ -75,11 +76,13 @@ ATTACK
             self.wfile.write(payload)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}", hits, state
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+    with local_https(server) if tls else nullcontext():
+        thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+        thread.start()
+        try:
+            scheme = "https" if tls else "http"
+            yield f"{scheme}://127.0.0.1:{server.server_port}", hits, state
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()

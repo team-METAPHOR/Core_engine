@@ -87,7 +87,7 @@ verified = await matrix.retest(result.job_id, "staff", reset=reset_condition,
     is_authorized=check_authorization)
 ```
 
-등록 조건은 백엔드가 만드는 신뢰된 값입니다. AI는 제공된 ID만 선택하고 가설을 적습니다. 계정을 생성하거나 권한·범위·브라우저 설정을 임의로 바꾸지 않습니다. 필수 계정이 없으면 질문합니다. 역할·세션·화면 크기·브라우저·응답 지연을 명시적으로 조합합니다. `response_delay_ms`는 각 응답 전달에 0~2000ms를 추가하며 대역폭 제한·패킷 손실 시뮬레이터는 아닙니다.
+등록 조건은 백엔드가 만드는 신뢰된 값입니다. AI는 제공된 ID만 선택하고 가설을 적습니다. 계정을 생성하거나 권한·범위·브라우저 설정을 임의로 바꾸지 않습니다. 필수 계정이 없으면 질문합니다. 역할·세션·화면 크기·브라우저·응답 지연을 명시적으로 조합합니다. `response_delay_ms`는 각 응답 전달에 0~2000ms를 추가하며 대역폭 제한·패킷 손실 시뮬레이터는 아닙니다. 0.4.1부터 세션 헤더/계정이 있는 조건은 HTTPS 원점만 허용합니다. HTTP+인증은 `CREDENTIALS_REQUIRE_HTTPS`이며 익명 HTTP는 허용합니다.
 
 `python -m playwright install chromium firefox webkit`으로 사용할 브라우저를 설치합니다. Linux 시스템 라이브러리도 준비합니다. 실제 브라우저 엔진을 실행하지만 전송 계층의 User-Agent 등 모든 헤더를 해당 사용자의 원래 브라우저와 동일하게 재현하지는 않습니다. 미설치/시작 실패는 `BROWSER_UNAVAILABLE`입니다.
 

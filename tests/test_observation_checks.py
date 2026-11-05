@@ -79,7 +79,7 @@ class ObservationTests(unittest.IsolatedAsyncioTestCase):
 
 class SessionCredentialTests(unittest.TestCase):
     def test_trusted_headers_forward_only_through_guarded_transport(self):
-        with site() as (origin, _, _):
+        with site(tls=True) as (origin, _, _):
             from http.client import HTTPConnection
             original = HTTPConnection.request
             sent = []

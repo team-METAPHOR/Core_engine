@@ -4,6 +4,7 @@ from .redaction import redact_text
 
 
 _REASONS = {
+    "CREDENTIALS_REQUIRE_HTTPS": ("environment_blocked", "테스트 계정이나 세션을 사용하는 대상은 HTTPS여야 합니다.", "프로그램 원점과 인증 대상 경로를 유효한 인증서가 있는 HTTPS 주소로 등록해주세요. 인증 없는 HTTP 검증은 가능합니다."),
     "LOGIN_FAILED": ("environment_blocked", "등록된 테스트 계정으로 로그인하거나 로그인 성공을 확인하지 못했습니다.", "테스트 계정·로그인 경로·폼 선택자·성공 확인 조건을 점검해주세요. 추가 인증이 필요한 화면은 현재 자동 로그인으로 처리하지 않습니다."),
     "STALE_COMPLETION_SIGNAL": ("execution_blocked", "이전 동작의 완료 표시만 남아 있고 마지막 동작 이후 새 처리 증거를 확인하지 못했습니다.", "마지막 입력 뒤 필요한 제출·검색 동작이 누락됐는지 확인하고, 마지막 동작의 완료 조건을 명확히 해주세요."),
     "STEP_OR_READINESS_FAILED": ("execution_blocked", "조작 대상 또는 처리 완료 조건을 확인하지 못했습니다.", "재현 순서·선택자·완료 문구를 확인해주세요."),

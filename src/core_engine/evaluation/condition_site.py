@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 
 from core_engine import BrowserPlan, Check, RunPolicy, Step
+from .local_tls import local_https
 
 
 HTML = b'''<!doctype html><meta charset="utf-8"><title>Report preview</title>
@@ -51,13 +52,14 @@ def condition_site(buggy=True):
             self.wfile.write(body)
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
-    thread.start()
-    origin = f'http://127.0.0.1:{server.server_port}'
-    policy = RunPolicy('demo', 1, origin, ('/app',), allow_private_targets=True, private_cidrs=('127.0.0.1/32',))
-    try:
-        yield origin, policy, state, requests
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+    with local_https(server):
+        thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+        thread.start()
+        origin = f'https://127.0.0.1:{server.server_port}'
+        policy = RunPolicy('demo', 1, origin, ('/app',), allow_private_targets=True, private_cidrs=('127.0.0.1/32',))
+        try:
+            yield origin, policy, state, requests
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()

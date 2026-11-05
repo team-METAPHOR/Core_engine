@@ -28,8 +28,7 @@ def export_playwright_test(plan: BrowserPlan, *, policy, options=None, test_name
     if not isinstance(test_name, str) or not 1 <= len(test_name) <= 200:
         raise ValueError("invalid test name")
     plan.validate_scope(policy)
-    if options.login:
-        options.login.validate_scope(policy)
+    options.validate_scope(policy)
     navigation_env, steps = {}, []
     for index, step in enumerate(plan.steps):
         if step.action in {"fill", "assert_text"} and options.redact(step.value) != step.value:
@@ -108,6 +107,7 @@ test(testName, async ({ browser }) => {
   if (typeof reset !== 'function') throw new Error('RESET_HOOK_REQUIRED');
   const entry = new URL(process.env.QA_ENTRY_URL || scenario.steps[0].target);
   if (!['http:', 'https:'].includes(entry.protocol) || entry.username || entry.password) throw new Error('INVALID_ENTRY_URL');
+  if ((scenario.sessionRequired || scenario.login) && entry.protocol !== 'https:') throw new Error('CREDENTIALS_REQUIRE_HTTPS');
   const within = (path: string, prefix: string) => prefix === '/' || path === prefix || path.startsWith(prefix + '/');
   const allowed = (value: string, method: string) => {
     const url = new URL(value);
@@ -172,8 +172,16 @@ test(testName, async ({ browser }) => {
           } else await route.fulfill({ response });
           return;
         }
-        if (scenario.responseDelayMs) {
+        if (scenario.responseDelayMs || scenario.sessionRequired || scenario.login) {
           const response = await route.fetch({ maxRedirects: 0 });
+          if ((scenario.sessionRequired || scenario.login) && [301, 302, 303, 307, 308].includes(response.status())) {
+            // Native redirect chains can bypass routing after their first hop.
+            // Only the explicit login POST redirect above is supported with credentials.
+            const location = response.headers()['location'];
+            blocker = location && new URL(location, request.url()).protocol !== 'https:'
+              ? 'CREDENTIALS_REQUIRE_HTTPS' : 'AUTHENTICATED_REDIRECT_UNSUPPORTED';
+            await route.abort(); return;
+          }
           await new Promise(resolve => setTimeout(resolve, scenario.responseDelayMs));
           await route.fulfill({ response });
         } else await route.continue();
