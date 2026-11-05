@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metaphor-core-engine"
-version = "0.3.0"
+version = "0.4.0"
 description = "Screenshot-driven web QA reproduction and evidence reports"
 requires-python = ">=3.11"
 dependencies = ["Pillow==13.0.0"]

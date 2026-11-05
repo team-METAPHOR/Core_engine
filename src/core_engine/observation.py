@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from .artifacts import JobStore
 from .images import Screenshot
+from .login import LoginOptions
 from .redaction import redact_text
 
 
@@ -25,8 +26,13 @@ class BrowserOptions:
     video_fps: int = 4
     video_max_seconds: int = 60
     response_delay_ms: int = 0
+    login: LoginOptions | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
+        if self.login is not None and not isinstance(self.login, LoginOptions):
+            raise ValueError("invalid trusted login options")
+        if self.login and (self.session_headers or self.test_context_id == "anonymous"):
+            raise ValueError("form login requires an explicit test context and cannot mix fixed headers")
         if self.browser_name not in {"chromium", "firefox", "webkit"}:
             raise ValueError("unsupported browser engine")
         if type(self.response_delay_ms) is not int or not 0 <= self.response_delay_ms <= 2000:
@@ -56,8 +62,11 @@ class BrowserOptions:
 
     def public(self):
         return {"width": self.width, "height": self.height, "app_version": self.app_version,
-                "test_context_id": self.test_context_id, "session_mode": "fixed_headers" if self.session_headers else "anonymous",
+                "test_context_id": self.test_context_id, "session_mode": "form_login" if self.login else "fixed_headers" if self.session_headers else "anonymous",
                 "browser_name": self.browser_name, "response_delay_ms": self.response_delay_ms}
+
+    def redact(self, value):
+        return self.login.redact(value) if self.login else redact_text(value)
 
 
 # Snapshot extraction executes only this fixed engine script. Page text remains untrusted.
@@ -132,9 +141,12 @@ class Recorder:
         elements = await page.evaluate(_ELEMENTS, sensitive)
         masks = [page.locator("css=" + selector) for selector in sensitive]
         masks.append(page.locator("input,textarea,[contenteditable=true]"))
+        if self.options.login:
+            # Also mask credentials accidentally echoed by the authenticated application.
+            masks.extend(page.get_by_text(secret, exact=False) for secret in self.options.login.secret_values())
         for item in elements:
             for key in ("name", "text", "selector"):
-                cleaned = redact_text(item[key])
+                cleaned = self.options.redact(item[key])
                 if cleaned != item[key]:
                     masks.append(page.locator("css=" + item["selector"]))
                 item[key] = cleaned
@@ -154,7 +166,7 @@ class Recorder:
         snapshot = {
             "id": uuid4().hex, "attempt": attempt, "step": step, "phase": phase,
             "revision": self.revision, "plan_sha256": self.plan_sha256,
-            "created_at": datetime.now(timezone.utc).isoformat(), "url": redact_text(page.url),
+            "created_at": datetime.now(timezone.utc).isoformat(), "url": self.options.redact(page.url),
             "elements": elements, "image": self.store.image(self.job_id, image),
             "network": list(network[-60:]), "errors": list(errors[-20:]),
         }

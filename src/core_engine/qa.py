@@ -91,19 +91,20 @@ class QAResult:
     error_code: str | None = None
 
 
-def clean_tree(value):
+def clean_tree(value, redactor=redact_text):
     if isinstance(value, str):
-        return redact_text(value)
-    if isinstance(value, list):
-        return [clean_tree(item) for item in value]
+        return redactor(value)
+    if isinstance(value, (list, tuple)):
+        return [clean_tree(item, redactor) for item in value]
     if isinstance(value, dict):
-        return {key: clean_tree(item) for key, item in value.items()}
+        return {key: clean_tree(item, redactor) for key, item in value.items()}
     return value
 
 
 class _ModelCalls:
-    def __init__(self, model, limits, guard):
+    def __init__(self, model, limits, guard, redactor=redact_text):
         self.model, self.limits, self.guard = model, limits, guard
+        self.redactor = redactor
         self.records = []
         self.tokens = 0
 
@@ -117,7 +118,7 @@ class _ModelCalls:
                   "status": "started", "model": None, "usage": None}
         self.records.append(record)
         call_started = time.monotonic()
-        arguments = dict(instructions=instructions, context=clean_tree(context), schema=schema)
+        arguments = dict(instructions=instructions, context=clean_tree(context, self.redactor), schema=schema)
         if images:
             arguments["images"] = images
         task = asyncio.create_task(asyncio.to_thread((model if model is not None else self.model).generate, **arguments))
@@ -135,7 +136,7 @@ class _ModelCalls:
             data = strict_json(generation.text)
             validate_output(data, schema)
             record["status"] = "completed"
-            return clean_tree(data)
+            return clean_tree(data, self.redactor)
         except (ModelError, PolicyError) as exc:
             record["status"] = exc.code
             if isinstance(exc, ModelError) and exc.retry_after_seconds is not None:
@@ -163,6 +164,8 @@ class QAService:
         self.model, self.policy, self.store = model, policy, store
         self.reviewer = reviewer
         self.options = options or BrowserOptions()
+        if self.options.login:
+            self.options.login.validate_scope(self.policy)
         self.limits = limits
         self.browser_limits = browser_limits or BudgetLimits(max_runtime_seconds=120, max_requests_per_minute=60)
 
@@ -193,11 +196,11 @@ class QAService:
         if _job_created:
             _job_created(job_id)
         recorder = Recorder(self.store, job_id, self.options)
-        calls = _ModelCalls(self.model, self.limits, guard)
+        calls = _ModelCalls(self.model, self.limits, guard, self.options.redact)
         image_ref = self.store.image(job_id, request.screenshot) if request.screenshot else None
         self.store.write_json(job_id, "request.json", {"report_id": request.report_id,
             "program_id": request.program_id, "entry_url": request.entry_url,
-            **request.text(), "screenshot": image_ref})
+            **clean_tree(request.text(), self.options.redact), "screenshot": image_ref})
         self.store.event(job_id, "received", {"parent_job_id": _parent, "baseline_job_id": _baseline})
         intake, plan, run, analysis, repairs = None, None, None, None, []
         contract = None
@@ -216,7 +219,8 @@ class QAService:
                 "program_id": request.program_id, "status": status, "title": (intake or {}).get("title", "QA 검증 결과"),
                 "classification": classification, "human_review_required": True,
                 "scope_revision": self.policy.scope_revision,
-                "environment": {**self.options.public(), "browser_version": recorder.browser_version},
+                "environment": {**self.options.public(), "browser_version": recorder.browser_version,
+                                "login_profile_sha256": self.options.login.fingerprint() if self.options.login else None},
                 "intake": intake, "scenario": clean_tree(encode_plan(plan)) if plan else None,
                 "scenario_contract": contract,
                 "plan_sha256": plan_digest(plan) if plan else None,
@@ -248,7 +252,9 @@ class QAService:
                         "required_environment": required_test_environment(plan, self.options)}
                 except (ValueError, OSError):
                     report["test_export"] = {"status": "failed", "artifact": None, "error_code": "TEST_EXPORT_FAILED"}
-            result = QAResult(job_id, request.report_id, request.program_id, status, report, tuple(questions), error)
+            report = clean_tree(report, self.options.redact)
+            result = QAResult(job_id, request.report_id, request.program_id, status, report,
+                              tuple(self.options.redact(q) for q in questions), error)
             self.store.write_json(job_id, "result.json", asdict(result))
             self.store.write(job_id, "report.md", render_report(report).encode("utf-8"))
             self.store.event(job_id, status, {"error_code": error})
@@ -263,6 +269,9 @@ class QAService:
                         raise ValueError("baseline identity mismatch")
                     if any(baseline_report["environment"].get(key) != self.options.public()[key]
                            for key in ("width", "height", "test_context_id", "session_mode")):
+                        raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
+                    if baseline_report["environment"].get("login_profile_sha256") != (
+                            self.options.login.fingerprint() if self.options.login else None):
                         raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
                     validate_output(saved["plan"], PLAN_DATA_SCHEMA)
                     plan = decode_plan(saved["plan"], timeout_ms=saved["step_timeout_ms"])
