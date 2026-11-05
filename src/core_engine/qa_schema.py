@@ -82,8 +82,11 @@ def flatten_draft(data, *, entry_url=None):
             **{key: data[key] for key in ("ready", "expected", "symptom")}}
 
 
-def repair_schema(selectors):
-    return _object(status=_enum("repair", "stop", "needs_info"), target=_enum("", *sorted(set(selectors))),
+def repair_schema(selectors=()):
+    # target stays free text: real selectors such as [data-testid="x"] contain double quotes, which
+    # OpenAI strict structured outputs reject inside enum string literals (HTTP 400). The allowed
+    # selectors travel in the context as `candidates`, and the engine rejects any other target.
+    return _object(status=_enum("repair", "stop", "needs_info"), target=optional_text(256),
                    reason=_text(), questions=_array(_text(800), 5))
 
 
@@ -259,8 +262,8 @@ the correct trigger when checking whether an input makes another control enabled
 No test verdict or hidden evaluation answer is provided in this feedback.
 """
 REPAIR_PROMPT = DATA_RULES + """
-A fixed test step failed. You may ONLY replace that step's CSS target with a compatible selector from
-the current snapshot. You cannot change the action, input value, step order, readiness or expected/symptom
+A fixed test step failed. You may ONLY replace that step's CSS target with a compatible selector copied
+exactly from `candidates` (selectors from the current snapshot). You cannot change the action, input value, step order, readiness or expected/symptom
 predicates. Match the same intended control; if not unambiguous return stop or needs_info with questions.
 Never suggest another test just to produce a desired verdict. target must be empty unless status=repair.
 """
