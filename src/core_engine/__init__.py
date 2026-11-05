@@ -11,6 +11,7 @@ from .checks import Check
 from .images import Screenshot
 from .observation import BrowserOptions, Recorder
 from .login import LoginOptions
+from .live import LiveMessage, LiveOptions, LiveStream
 from .qa import QALimits, QARequest, QAResult, QAService
 from .plan import BrowserPlan, Step, TextCheck
 from .policy import PolicyError, ResolvedTarget, RunPolicy, canonical_url
@@ -21,6 +22,9 @@ from .conditions import ConditionLimits, ConditionsResult, ConditionsService, Te
 __all__ = [
     "BrowserOptions",
     "LoginOptions",
+    "LiveMessage",
+    "LiveOptions",
+    "LiveStream",
     "Check",
     "JobStore",
     "QALimits",

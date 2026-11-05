@@ -136,7 +136,7 @@ class ConditionsService:
         self.model, self.reviewer, self.policy, self.store = model, reviewer, policy, store
         self.conditions, self.limits, self.qa_limits, self.browser_limits = conditions, limits, qa_limits, browser_limits
 
-    async def run(self, request, *, reset, is_authorized, cancelled=None, select=True):
+    async def run(self, request, *, reset, is_authorized, cancelled=None, select=True, live_factory=None):
         if request.program_id != self.policy.program_id or type(select) is not bool:
             raise ValueError("invalid matrix request")
         self.policy.check_url(request.entry_url)
@@ -257,7 +257,7 @@ class ConditionsService:
 
                     result = await service.run(replace(request, entry_url=condition.entry_url or request.entry_url),
                         reset=reset_condition, is_authorized=is_authorized, cancelled=cancelled, _parent=job_id,
-                        _job_created=created)
+                        _job_created=created, live=live_factory(condition.id) if live_factory else None)
                     update_row(row, asdict(result))
                     row["elapsed_seconds"] = round(time.monotonic() - before, 3)
                     self.store.event(job_id, "condition_finished", {"condition_id": condition.id, "status": result.status})
@@ -280,7 +280,7 @@ class ConditionsService:
             error = exc.code
             return finish("cancelled" if error == "CANCELLED" else "inconclusive")
 
-    async def retest(self, matrix_job_id, condition_id, *, reset, is_authorized, cancelled=None):
+    async def retest(self, matrix_job_id, condition_id, *, reset, is_authorized, cancelled=None, live=None):
         try:
             allowed = is_authorized()
         except Exception:
@@ -303,7 +303,7 @@ class ConditionsService:
         async def reset_condition(ordinal):
             return await reset(condition.id, ordinal)
 
-        return await service.retest(row["job_id"], reset=reset_condition, is_authorized=is_authorized, cancelled=cancelled)
+        return await service.retest(row["job_id"], reset=reset_condition, is_authorized=is_authorized, cancelled=cancelled, live=live)
 
 
 def _render(report):

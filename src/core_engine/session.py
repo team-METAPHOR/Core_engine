@@ -67,6 +67,7 @@ class GuardedPage:
         self.started = time.monotonic()
         self.observed_responses = frozenset(observed_responses)
         self.video = None
+        self.preview = None
         self.attempt = attempt
         self.login_in_progress = False
         self.login_post_used = False
@@ -103,6 +104,9 @@ class GuardedPage:
                 await perform_login(self)
             if self.options.record_video and self.recorder:
                 self.video = self.recorder.open_video(self)
+            if self.recorder and self.recorder.live:
+                from .live import PreviewCapture
+                self.preview = PreviewCapture(self.recorder, self)
             return self
         except BaseException:
             await self.context.close()
@@ -111,6 +115,8 @@ class GuardedPage:
     async def __aexit__(self, *_):
         try:
             try:
+                if self.preview:
+                    await self.preview.finish()
                 if self.video:
                     await self.video.finish()
             finally:
@@ -125,7 +131,7 @@ class GuardedPage:
     async def capture_video_frame(self):
         from playwright.async_api import Error
 
-        if self.page is None or self.page.url == "about:blank":
+        if self.page is None or self.page.url == "about:blank" or self._login_screen():
             return None
         self.transport.check()
         self.transport.policy.check_url(self.page.url)
@@ -137,7 +143,21 @@ class GuardedPage:
                 # frame and resume with a freshly masked frame on the next tick.
                 return None
             raise
+        if not self._capture_allowed():
+            return None
         return image
+
+    def _capture_allowed(self):
+        self.transport.check()
+        self.transport.policy.check_url(self.page.url)
+        return not self._login_screen()
+
+    def _login_screen(self):
+        if self.login_in_progress:
+            return True
+        login = self.options.login
+        return bool(login and self.page and urlsplit(self.page.url).path in {
+            urlsplit(login.login_path).path, urlsplit(login.submit_path or login.login_path).path})
 
     def page_error(self, error):
         if self.login_in_progress:
@@ -226,12 +246,12 @@ class GuardedPage:
         self.check()
 
     async def capture(self, attempt, step, phase):
-        if self.recorder is None or self.page.url == "about:blank":
+        if self.recorder is None or self.page.url == "about:blank" or self._login_screen():
             return None
         self.transport.check()
         self.transport.policy.check_url(self.page.url)
         try:
             return await self.recorder.capture(self.page, attempt=attempt, step=step, phase=phase,
-                                               network=self.network, errors=self.errors)
+                                               network=self.network, errors=self.errors, check=self._capture_allowed)
         except (ValueError, OSError):
             raise PolicyError("EVIDENCE_CAPTURE_FAILED") from None

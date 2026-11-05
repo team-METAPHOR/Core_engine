@@ -119,8 +119,9 @@ _ELEMENTS = """sensitive => {
 
 
 class Recorder:
-    def __init__(self, store: JobStore, job_id: str, options: BrowserOptions):
+    def __init__(self, store: JobStore, job_id: str, options: BrowserOptions, *, live=None):
         self.store, self.job_id, self.options = store, job_id, options
+        self.live = live
         self.snapshots: list[dict] = []
         self.total_image_bytes = 0
         self.revision = -1
@@ -135,8 +136,13 @@ class Recorder:
         from .video import VideoCapture
         capture = VideoCapture(self, session.capture_video_frame, attempt=session.attempt, origin=session.started)
         self.videos.append(capture.metadata)
-        self.active_video = capture.start()
+        self.active_video = capture.start(sample=self.live is None)
         return self.active_video
+
+    def progress(self, *, attempt, phase, step_index=None, action=None, total_steps=None):
+        if self.live:
+            self.live._progress(attempt=attempt, revision=self.revision, phase=phase,
+                                step_index=step_index, action=action, total_steps=total_steps)
 
     async def masked_image(self, page):
         async with self._capture_lock:
@@ -161,12 +167,16 @@ class Recorder:
         data = await page.screenshot(type="png", full_page=False, mask=masks, animations="disabled", timeout=3000)
         return Screenshot(data), elements
 
-    async def capture(self, page, *, attempt, step, phase, network, errors):
+    async def capture(self, page, *, attempt, step, phase, network, errors, check=None):
         if len(self.snapshots) >= 256:
             raise ValueError("snapshot limit exceeded")
         image, elements = await self.masked_image(page)
+        if check and check() is False:
+            return None
         if self.active_video:
             self.active_video.add(image)
+        if self.live:
+            self.live._frame(image)
         self.total_image_bytes += len(image.data)
         if self.total_image_bytes > 64 * 1024 * 1024:
             raise ValueError("job screenshot budget exceeded")

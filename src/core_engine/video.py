@@ -29,10 +29,10 @@ class VideoCapture:
             "has_audio": False, "truncated": False, "capture_error": None, "artifact": None}
         self.task = None
 
-    def start(self):
+    def start(self, *, sample=True):
         if not self.encoder:
             self.metadata.update(status="unavailable", capture_error="VIDEO_ENCODER_UNAVAILABLE")
-        else:
+        elif sample:
             self.task = asyncio.create_task(self._sample())
         return self
 

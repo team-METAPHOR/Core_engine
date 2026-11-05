@@ -85,6 +85,7 @@ class BrowserRunner:
         try:
             async with asyncio.timeout(self.limits.max_runtime_seconds):
                 transport.check()
+                self.recorder.progress(attempt=0, phase="attempt_started")
                 await self._reset(reset, 0)
                 transport.check()
                 async with browser_driver() as pw:
@@ -93,6 +94,7 @@ class BrowserRunner:
                         self._browser_metadata(browser)
                         async with GuardedPage(browser, transport, self.options, self.recorder,
                                                self.options.step_timeout_ms) as session:
+                            self.recorder.progress(attempt=0, phase="discovery")
                             try:
                                 await session.navigate(url)
                             except (PolicyError, Error):
@@ -182,6 +184,12 @@ class BrowserRunner:
             stage = name
             timeline.append({"stage": name, "step_index": step_index,
                              "elapsed_seconds": round(time.monotonic() - started, 3)})
+            if self.recorder:
+                self.recorder.progress(attempt=ordinal, phase=name, step_index=step_index,
+                    action=plan.steps[step_index].action if step_index is not None else None,
+                    total_steps=len(plan.steps))
+        if self.recorder:
+            self.recorder.progress(attempt=ordinal, phase="attempt_started", total_steps=len(plan.steps))
         try:
             if self.options.login:
                 mark("login")
@@ -231,6 +239,9 @@ class BrowserRunner:
                                 await expect(locator).to_have_text(step.value, timeout=plan.step_timeout_ms, use_inner_text=True)
                         session.check()
                         completed += 1
+                        if self.recorder:
+                            self.recorder.progress(attempt=ordinal, phase="action_completed", step_index=index,
+                                                   action=step.action, total_steps=len(plan.steps))
                         snapshot = await session.capture(ordinal, index, "after")
                         if snapshot:
                             snapshots.append(snapshot["id"])
@@ -284,6 +295,9 @@ class BrowserRunner:
             blocker = exc.code
         if blocker:
             observed = expected = None
+        if self.recorder:
+            self.recorder.progress(attempt=ordinal, phase="attempt_failed" if blocker else "attempt_finished",
+                                   total_steps=len(plan.steps))
         record = Evidence(uuid4().hex, ordinal, completed, ready, observed, blocker,
                           expected_observed=expected, observation_ids=tuple(snapshots), stage=stage,
                           elapsed_seconds=round(time.monotonic() - started, 3), timeline=tuple(timeline),
