@@ -51,6 +51,12 @@ def _host(value: str) -> str:
     return address.compressed
 
 
+def require_https_for_credentials(url: str) -> None:
+    """Reject credential-bearing targets before DNS resolution or socket creation."""
+    if urlsplit(url).scheme != "https":
+        raise PolicyError("CREDENTIALS_REQUIRE_HTTPS")
+
+
 def canonical_url(value: str) -> str:
     """Return a conservative, unambiguous HTTP(S) URL."""
     if (

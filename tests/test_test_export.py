@@ -48,8 +48,14 @@ class ExecutedExportTests(unittest.IsolatedAsyncioTestCase):
             (root / 'scenario.spec.ts').write_text(source)
             env = {key: value for key, value in os.environ.items() if not key.startswith('QA_')}
             env.update(QA_RESET_MODULE=str((JS / 'reset.mjs').resolve()), **(extra_env or {}))
+            # Trust exactly the temporary loopback certificate in this test browser.
+            # Production exports never disable certificate validation.
+            args = ['--ignore-certificate-errors-spki-list=' + env['METAPHOR_TEST_TLS_SPKI']] if env.get('METAPHOR_TEST_TLS_SPKI') else []
+            config = root / 'playwright.config.mjs'
+            config.write_text('export default ' + json.dumps({'testDir': str(root), 'use': {'launchOptions': {'args': args}}}))
             process = await asyncio.create_subprocess_exec('node', str(JS / 'node_modules/@playwright/test/cli.js'),
                 'test', str(root / 'scenario.spec.ts'), '--reporter=json', '--workers=1', '--output=' + str(root / 'results'),
+                '--config=' + str(config),
                 cwd=JS, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             stdout, stderr = await asyncio.wait_for(process.communicate(), 120)
             try:
@@ -83,6 +89,30 @@ class ExecutedExportTests(unittest.IsolatedAsyncioTestCase):
             state['buggy'] = False
             code, fixed = await self.execute(source, extra_env={'QA_AUTHORIZATION': 'Bearer synthetic-staff'})
             self.assertEqual(code, 0, fixed)
+
+    async def test_http_entry_override_cannot_send_a_registered_session(self):
+        with site() as (origin, hits, _):
+            secure = origin.replace('http:', 'https:')
+            scenario = decode_plan(plan(secure + '/app/mixed')['plan'], timeout_ms=1000)
+            source = export_playwright_test(scenario, policy=local_policy(secure),
+                options=BrowserOptions(test_context_id='staff', session_headers={'Authorization': 'synthetic'}))
+            code, report = await self.execute(source, extra_env={
+                'QA_ENTRY_URL': origin + '/app/mixed', 'QA_AUTHORIZATION': 'Bearer synthetic-no-plaintext'})
+            self.assertEqual(code, 1, report)
+            self.assertIn('CREDENTIALS_REQUIRE_HTTPS', json.dumps(report))
+            self.assertNotIn('synthetic-no-plaintext', json.dumps(report))
+            self.assertEqual(hits, [])
+
+    async def test_authenticated_redirect_never_reaches_plaintext_destination(self):
+        with site() as (plain, plain_hits, _), site(tls=True) as (secure, secure_hits, state):
+            state['redirect_location'] = plain + '/app/bug'
+            scenario = decode_plan(plan(secure + '/app/redirect')['plan'], timeout_ms=1000)
+            source = export_playwright_test(scenario, policy=local_policy(secure),
+                options=BrowserOptions(test_context_id='staff', session_headers={'Cookie': 'session=synthetic'}))
+            code, report = await self.execute(source, extra_env={'QA_COOKIE': 'session=synthetic'})
+            self.assertEqual(code, 1, report)
+            self.assertEqual([hit[1] for hit in secure_hits], ['/app/redirect'])
+            self.assertEqual(plain_hits, [])
 
     async def test_visual_and_boolean_predicates_compile_and_run(self):
         with site() as (origin, _, _):

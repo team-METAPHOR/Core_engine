@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 import threading
+from core_engine.evaluation.local_tls import local_https
 
 LOGIN_ID = 'qa-member-login-canary'
 PASSWORD = 'private-login-password-canary-47'
@@ -66,11 +67,12 @@ def login_site():
                 '<button id="write" onclick="fetch(\'/app/write\', {method:\'POST\',body:\'not-allowed\'}).catch(()=>{})">Write</button>')
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=.01), daemon=True)
-    thread.start()
-    try:
-        yield f'http://127.0.0.1:{server.server_port}', state
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join()
+    with local_https(server):
+        thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=.01), daemon=True)
+        thread.start()
+        try:
+            yield f'https://127.0.0.1:{server.server_port}', state
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()

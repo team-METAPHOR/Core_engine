@@ -60,8 +60,7 @@ class BrowserRunner:
         self.policy, self.limits = policy, limits
         self.options, self.recorder = options or BrowserOptions(), recorder
         self.expected_browser_version = expected_browser_version
-        if self.options.login:
-            self.options.login.validate_scope(self.policy)
+        self.options.validate_scope(self.policy)
 
     def _browser_metadata(self, browser):
         if self.expected_browser_version and browser.version != self.expected_browser_version:

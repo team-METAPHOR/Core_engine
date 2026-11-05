@@ -164,8 +164,7 @@ class QAService:
         self.model, self.policy, self.store = model, policy, store
         self.reviewer = reviewer
         self.options = options or BrowserOptions()
-        if self.options.login:
-            self.options.login.validate_scope(self.policy)
+        self.options.validate_scope(self.policy)
         self.limits = limits
         self.browser_limits = browser_limits or BudgetLimits(max_runtime_seconds=120, max_requests_per_minute=60)
 

@@ -190,6 +190,7 @@ result = await service.run(request, reset=reset_test_state, is_authorized=check_
 - 전체 DOM·응답 본문·쿠키·인증 헤더를 모델이나 보고서에 저장하지 않습니다. 근거는 제한된 요소 요약과 요청 메타데이터입니다. 원인과 서버 데이터의 정확성은 추가 확인이 필요할 수 있습니다.
 - 한 작업은 정확한 원점 하나와 승인된 경로만 사용합니다. DNS 전체 결과를 검사하고 확인한 숫자 IP에 직접 연결하며 Host와 TLS 검증을 유지합니다. QA 동작은 GET/HEAD/OPTIONS를 사용합니다. 아래의 등록된 로그인 제출을 제외한 POST·파일 업로드·WebSocket·팝업·다운로드·지속 SSE·압축 응답은 지원하지 않습니다.
 - 필요하면 백엔드가 준비한 합성 테스트 세션의 `Authorization`/`Cookie`를 `BrowserOptions.session_headers`로 주입하고 같은 계정·데이터 환경을 식별할 `test_context_id`를 지정합니다. 승인된 전송 모듈에서만 사용하며 로그인·세션 갱신을 AI가 수행하지 않습니다. 헤더는 결과에 기록하지 않습니다. 재검증 시 화면 크기·테스트 컨텍스트·세션 모드가 달라지면 비교를 보류합니다.
+- `0.4.1`부터 세션 헤더나 등록 계정을 사용하는 대상은 **HTTPS 필수**입니다. HTTP는 DNS 조회·소켓 연결 전에 `CREDENTIALS_REQUIRE_HTTPS`로 거절하며 localhost/사설망 예외는 없습니다. 인증 없는 HTTP 검증은 계속 가능합니다. 인증서 검증을 유지하며, 내보낸 테스트도 실행 URL을 HTTP로 바꾸면 거절합니다. 백엔드도 [설정 검증 이슈](https://github.com/team-METAPHOR/Metaphor-back/issues/79)의 조건을 적용해야 합니다.
 - `0.4.0`부터 등록된 계정은 `BrowserOptions.login=LoginOptions(...)`로 전달할 수 있습니다. 탐색·두 번의 재현·재검증마다 새 컨텍스트에서 로그인합니다. 호스트가 지정한 경로의 POST 한 번만 허용하고 성공 URL/요소를 확인합니다. 계정은 모델 입력·계획에 포함하지 않으며 로그인 중 화면·영상·콘솔·요청 기록을 수집하지 않습니다. [백엔드 연결 및 제한 사항](docs/registered-test-login.md)을 참고하세요.
 - 작업 도중 취소·승인 철회가 발생하면 새 행동과 모델 호출을 중단합니다. 이미 전송된 요청은 회수할 수 없습니다. 진행 중인 모델 HTTP 요청은 자체 통신 제한 시간까지 남을 수 있습니다.
 - 배포 시 별도 워커/컨테이너·네트워크 출구 제한·강제 종료 감독을 적용해야 합니다. `JobStore`는 신뢰된 백엔드 전용 로컬 저장소로, 디렉터리 0700·파일 0600 권한을 사용합니다. 고객별 접근 통제·보존 기간·삭제·백업은 백엔드 책임입니다.
@@ -199,6 +200,8 @@ result = await service.run(request, reset=reset_test_state, is_authorized=check_
 ```bash
 # 생성된 TypeScript 테스트 실제 실행 검증에 필요
 npm ci --prefix tests/js
+# 인증 테스트의 임시 로컬 TLS 인증서 생성에 OpenSSL 필요
+openssl version
 PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests -v
 ```
 

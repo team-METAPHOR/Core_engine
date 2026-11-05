@@ -1,5 +1,7 @@
 # 등록된 테스트 계정 로그인 — 0.4.0
 
+**0.4.1 보안 변경:** 로그인 대상 원점은 유효한 인증서를 사용하는 HTTPS여야 합니다. HTTP 설정은 초기 검증에서 `PolicyError("CREDENTIALS_REQUIRE_HTTPS")`로 거절하므로 백엔드는 생성자 호출 단계에서도 이 코드를 처리해야 합니다. `session_headers`도 같은 제약을 적용하며 localhost/사설망 예외와 인증서 검증 해제 옵션은 없습니다. 인증 없는 HTTP QA만 허용합니다.
+
 관련 이슈: [Core_engine #11](https://github.com/team-METAPHOR/Core_engine/issues/11), [백엔드 #61](https://github.com/team-METAPHOR/Metaphor-back/issues/61).
 
 백엔드 워커가 복호화한 계정을 `LoginOptions`로 전달하면 엔진이 로그인 후 QA를 실행합니다. 탐색과 두 번의 재현은 각각 새 브라우저 컨텍스트를 사용하며, 매번 초기화와 로그인을 거칩니다. 고정 계획 재검증도 같은 과정을 사용합니다. AI가 계정이나 로그인 절차를 생성하지 않습니다.
@@ -60,6 +62,10 @@ service = QAService(model, policy, store, options=options)
 
 로그인 단계가 원본 캡처에 남지 않도록 생성 테스트의 Playwright trace/video/screenshot은 꺼져 있습니다. 플랫폼 재현 영상은 엔진이 별도로 만드는 마스킹 영상입니다. 내보낸 테스트는 엔진의 DNS/IP 고정 전송을 구현하지 않으므로 승인된 격리 테스트 환경에서 실행합니다.
 
+내보낸 인증 테스트에서 `QA_ENTRY_URL`을 HTTP로 바꾸면 실행 전에 거절합니다. 등록된 로그인 POST의 명시적인 이동 외에 일반 응답의 리다이렉트는 인증 정보가 후속 요청으로 전달되지 않도록 차단합니다.
+
 ## 로컬 검증
 
 `tests/test_login.py`는 외부 AI API 없이 합성 서버와 실제 브라우저를 사용합니다. 새 세션별 로그인, 잘못된 계정, 범위 차단과 일반 POST 차단, 영상 제외/연속성, 반영된 비밀번호 마스킹, 모델·결과·파일의 계정 비노출, 고정 계획 재검증, 내보낸 테스트의 결함 실패/수정 통과를 확인합니다. 이 결과는 AI 정확도나 고객 사이트 전체 호환성 수치가 아닙니다.
+
+인증 관련 합성 서버는 임시 TLS 인증서를 생성합니다(OpenSSL 필요). Python/Node의 기존 신뢰 루트에 해당 인증서를 테스트 동안만 추가하고, 테스트용 Chromium은 해당 인증서의 공개키만 고정합니다. 시스템 인증서 저장소와 운영 엔진의 검증 설정은 바꾸지 않습니다.

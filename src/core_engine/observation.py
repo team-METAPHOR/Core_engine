@@ -9,6 +9,7 @@ from uuid import uuid4
 from .artifacts import JobStore
 from .images import Screenshot
 from .login import LoginOptions
+from .policy import require_https_for_credentials
 from .redaction import redact_text
 
 
@@ -64,6 +65,12 @@ class BrowserOptions:
         return {"width": self.width, "height": self.height, "app_version": self.app_version,
                 "test_context_id": self.test_context_id, "session_mode": "form_login" if self.login else "fixed_headers" if self.session_headers else "anonymous",
                 "browser_name": self.browser_name, "response_delay_ms": self.response_delay_ms}
+
+    def validate_scope(self, policy):
+        if self.session_headers or self.login:
+            require_https_for_credentials(policy.base_url)
+        if self.login:
+            self.login.validate_scope(policy)
 
     def redact(self, value):
         return self.login.redact(value) if self.login else redact_text(value)
