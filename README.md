@@ -108,6 +108,8 @@ PYTHONPATH=src python -m core_engine.evaluation --live --repeats 3 --retest-fixe
 
 한국어 결과표·JSON·CSV·화면 근거·시간·토큰 기록을 `.qa-evals/`에 저장합니다. 이 세트는 공개된 합성 개발용 사례입니다. 평가 대상, 호출 상한, 지표의 분모와 제한은 [평가 실행 명세](docs/qa-evaluation.md)를 참고하세요.
 
+[첫 실제 AI 평가 결과](docs/evaluation-baseline-2026-11-05.md)에는 12개 사례를 각 3회 실행한 결과와 실패 원인을 공개합니다.
+
 ## 백엔드 호출
 
 ```python
