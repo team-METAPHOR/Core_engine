@@ -94,6 +94,22 @@ python examples/qa_demo.py --live --retest-fixed
 
 유료 모델 호출은 자동 테스트에 포함하지 않습니다. 테스트는 프로토콜·흐름·실제 브라우저 결과를 검사하며, 모델의 분류 정확도·재현 계획 성공률·프롬프트 공격 저항성을 입증하지 않습니다.
 
+## 작은 평가 세트와 자동 실행기
+
+검색·필터·텍스트 잘림·버튼 겹침의 버그/정상 쌍 8건, 정보 부족 2건, 환경 장애 2건을 평가합니다. 실제 모델 결과는 모델이 만든 계획을 별도로 다시 실행하고 실제 조작 이력·화면 상태로 채점합니다.
+
+```bash
+# 키 없이 실행기 검증: AI 성능 점수가 아닙니다.
+PYTHONPATH=src python -m core_engine.evaluation --repeats 1 --retest-fixed
+
+# 환경변수 설정 후 실제 AI 평가: 12개 사례를 각 3회 실행합니다.
+PYTHONPATH=src python -m core_engine.evaluation --live --repeats 3 --retest-fixed
+```
+
+한국어 결과표·JSON·CSV·화면 근거·시간·토큰 기록을 `.qa-evals/`에 저장합니다. 이 세트는 공개된 합성 개발용 사례입니다. 평가 대상, 호출 상한, 지표의 분모와 제한은 [평가 실행 명세](docs/qa-evaluation.md)를 참고하세요.
+
+[첫 실제 AI 평가 결과](docs/evaluation-baseline-2026-11-05.md)에는 12개 사례를 각 3회 실행한 결과와 실패 원인을 공개합니다.
+
 ## 백엔드 호출
 
 ```python

@@ -52,8 +52,8 @@ class DemoModel:
 
 
 async def execute(origin, store, state, args, live_model):
-    url = origin + '/search_bug.html'
-    policy = RunPolicy('local-demo', 1, origin, ('/search_bug.html',), allow_private_targets=True,
+    url = origin + '/catalog'
+    policy = RunPolicy('local-demo', 1, origin, ('/catalog',), allow_private_targets=True,
                        private_cidrs=('127.0.0.1/32',))
     options = BrowserOptions(app_version='fixture-bug', step_timeout_ms=500 if not args.live else 3000)
     async def reset(_attempt):
