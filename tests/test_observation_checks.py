@@ -47,7 +47,6 @@ class ObservationTests(unittest.IsolatedAsyncioTestCase):
     async def test_visibility_count_enabled_and_clipping(self):
         with site() as (origin, _, _):
             pairs = [
-                (Check('visible', '#missing', 'false'), Check('visible', '#missing', 'true')),
                 (Check('count', 'button', '2'), Check('count', 'button', '0')),
                 (Check('enabled', '#a', 'true'), Check('enabled', '#a', 'false')),
                 (Check('clipped', '#clip', 'true'), Check('clipped', '#clip', 'false')),
@@ -57,6 +56,18 @@ class ObservationTests(unittest.IsolatedAsyncioTestCase):
                                    symptom, expected=expected)
                 result = await BrowserRunner(local_policy(origin)).run(plan, reset=reset, is_authorized=lambda: True)
                 self.assertEqual(result.verdict.value, 'reproduced', result)
+
+    async def test_absence_of_a_selector_that_never_matched_is_not_evidence(self):
+        # BUG-47 (0.8.8): "#missing" matches no element at any point, so "not visible" / "count 0"
+        # cannot decide the verdict either way.
+        with site() as (origin, _, _):
+            for symptom, expected in ((Check('visible', '#missing', 'false'), Check('visible', '#missing', 'true')),
+                                      (Check('count', '#missing', '0'), Check('count', 'button', '0'))):
+                plan = BrowserPlan((Step('navigate', origin + '/app/visual'),), Check('text', '#ready', 'done'),
+                                   symptom, expected=expected)
+                result = await BrowserRunner(local_policy(origin)).run(plan, reset=reset, is_authorized=lambda: True)
+                self.assertEqual(result.verdict.value, 'inconclusive', result)
+                self.assertEqual({a.blocker for a in result.attempts}, {'CHECK_TARGET_NEVER_MATCHED'})
 
     async def test_missing_and_ambiguous_check_targets_are_inconclusive(self):
         with site() as (origin, _, _):

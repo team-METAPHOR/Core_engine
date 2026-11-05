@@ -70,10 +70,34 @@ class Check:
             raise ValueError("only overlap requires a secondary selector")
 
 
-async def observe_check(page, check, network=None, baseline=None) -> bool:
+# Selector checks: their target must match a real element (planning grounds them on the replay).
+SELECTOR_KINDS = frozenset({"text", "visible", "enabled", "count", "overlap", "clipped", "attribute"})
+
+
+async def note_matches(page, checks, seen):
+    """Add to `seen` each check selector that matches at least one element on the current page."""
+    from playwright.async_api import Error
+
+    for check in checks:
+        if not isinstance(check, Check) or check.kind not in SELECTOR_KINDS:
+            continue
+        for selector in filter(None, (check.selector, check.other_selector)):
+            if selector in seen:
+                continue
+            try:
+                if await page.locator("css=" + selector).count() > 0:
+                    seen.add(selector)
+            except Error:
+                pass
+
+
+async def observe_check(page, check, network=None, baseline=None, seen=None) -> bool:
     """Missing/ambiguous elements are blocked except explicit visibility/count checks.
 
-    `baseline` maps selectors to their text before the final action, for relative text checks."""
+    `baseline` maps selectors to their text before the final action, for relative text checks.
+    With `seen` (selectors matched earlier in this attempt; updated here), the absence of a
+    visibility/count target counts only when that selector matched an element before: a selector
+    that never matched anything is a wrong selector, not evidence, so it is CHECK_TARGET_NEVER_MATCHED."""
     if not isinstance(check, Check):
         # Legacy TextCheck keeps its visible-element semantics.
         check = Check("text", check.selector, check.text)
@@ -87,6 +111,11 @@ async def observe_check(page, check, network=None, baseline=None) -> bool:
         return matching[-1]["status"] == int(check.value)
     locator = page.locator("css=" + check.selector)
     count = await locator.count()
+    if seen is not None:
+        if count:
+            seen.add(check.selector)
+        elif check.kind in {"visible", "count"} and check.selector not in seen:
+            raise PolicyError("CHECK_TARGET_NEVER_MATCHED")
     if check.kind == "count":
         return count == int(check.value)
     if check.kind == "visible":
@@ -130,7 +159,7 @@ async def observe_check(page, check, network=None, baseline=None) -> bool:
     return actual == (check.value == "true")
 
 
-async def wait_for_check(page, check, timeout_ms, guard, network=None, paused=None):
+async def wait_for_check(page, check, timeout_ms, guard, network=None, paused=None, seen=None):
     """paused() is a monotonic count of seconds spent queued for the request-rate window;
     that time extends the deadline (the caller's overall runtime limit still bounds it)."""
     deadline = time.monotonic() + timeout_ms / 1000
@@ -138,10 +167,11 @@ async def wait_for_check(page, check, timeout_ms, guard, network=None, paused=No
     while True:
         guard()
         try:
-            if await observe_check(page, check, network):
+            if await observe_check(page, check, network, seen=seen):
                 return
         except PolicyError as exc:
-            if exc.code not in {"CHECK_TARGET_UNAVAILABLE", "CHECK_ATTRIBUTE_UNAVAILABLE", "RESPONSE_NOT_OBSERVED"}:
+            if exc.code not in {"CHECK_TARGET_UNAVAILABLE", "CHECK_ATTRIBUTE_UNAVAILABLE", "RESPONSE_NOT_OBSERVED",
+                                "CHECK_TARGET_NEVER_MATCHED"}:
                 raise
         if time.monotonic() >= deadline + ((paused() - baseline) if paused else 0.0):
             raise PolicyError("STEP_OR_READINESS_FAILED")

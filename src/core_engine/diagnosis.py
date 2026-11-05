@@ -22,6 +22,7 @@ _REASONS = {
     "LOGIN_FAILED": ("environment_blocked", "등록된 테스트 계정으로 로그인하거나 로그인 성공을 확인하지 못했습니다.", "테스트 계정·로그인 경로·폼 선택자·성공 확인 조건을 점검해주세요. 추가 인증이 필요한 화면은 현재 자동 로그인으로 처리하지 않습니다."),
     "STALE_COMPLETION_SIGNAL": ("execution_blocked", "이전 동작의 완료 표시만 남아 있고 마지막 동작 이후 새 처리 증거를 확인하지 못했습니다.", "마지막 입력 뒤 필요한 제출·검색 동작이 누락됐는지 확인하고, 마지막 동작의 완료 조건을 명확히 해주세요."),
     "STEP_OR_READINESS_FAILED": ("execution_blocked", "조작 대상 또는 처리 완료 조건을 확인하지 못했습니다.", "재현 순서·선택자·완료 문구를 확인해주세요."),
+    "CHECK_TARGET_NEVER_MATCHED": ("execution_blocked", "결과 확인용 선택자가 실행 중 어떤 화면 요소와도 일치하지 않아 표시 여부로 판정하지 않았습니다.", "팝업·요소의 실제 선택자를 확인해주세요. 존재하지 않는 요소를 '보이지 않음'으로 판정하지 않습니다."),
     "CHECK_TARGET_UNAVAILABLE": ("execution_blocked", "결과를 확인할 화면 요소가 없거나 표시되지 않았습니다.", "권한과 화면 상태가 제보 당시 조건과 같은지 확인해주세요."),
     "AMBIGUOUS_CHECK_TARGET": ("execution_blocked", "검사 대상이 여러 개여서 결과를 하나로 결정하지 못했습니다.", "검사할 요소를 구분할 안정적인 선택자가 필요합니다."),
     "RELATIVE_BASELINE_UNAVAILABLE": ("inconclusive", "마지막 조작 직전의 비교 기준 값을 확인하지 못했습니다.", "변경 여부를 비교할 요소가 마지막 클릭·입력 전에도 화면에 보이도록 단계를 구체화해주세요."),

@@ -26,7 +26,7 @@ FEEDBACK = {
     "PLAN_SCREEN_NOT_REACHED": "The report acts on another screen, but the first interaction target is not on the entry page. Before it, add ONE click on the visible link/card for that screen/item from page.elements, or navigate to an in-scope href listed in page.elements. When page.elements shows no way there, navigate to the site root \"/\" and click the link/card whose text matches the named item.",
     "PLAN_TEXT_TARGET": "A click/fill target or check selector is plain visible text, not a CSS selector. Use the exact selector of the matching element from page.elements (match its text or name), or a CSS selector built from attributes such as [data-testid=...], [aria-label=...] or #id.",
     "PLAN_PROSE_CHECK_VALUE": "A text check value is a descriptive sentence, not text the page shows. Use the short exact inner text (at most 40 characters) of ONE observed element, e.g. the quantity number or the price, never a summary such as \"수량이 증가하고 합계도 변경됨\".",
-    "PLAN_UNGROUNDED_CHECK": "A text check selector does not match any element in the supplied page.elements. Copy the exact selector of the observed element that shows the value (prefer [data-testid=...] or #id), do not guess positional div > div paths.",
+    "PLAN_UNGROUNDED_CHECK": "A check selector does not match any element observed on the page (a text check: the final page.elements; a visible/enabled/clipped/count/attribute/overlap check: the final page or any replay_pages snapshot). A selector that matches nothing is never evidence that an element is hidden or absent. Copy the exact selector of the observed element (for a dialog/popup, the element listed in the replay_pages snapshot taken after it opened; prefer [data-testid=...] or #id), do not guess names or positional div > div paths.",
     "PLAN_UNREPORTED_REPEAT": "Do not duplicate the final trigger in both setup_steps and final_action. Consecutive identical interactions require explicitly repeated required_actions from the report.",
 }
 
@@ -60,21 +60,32 @@ def _canon(selector):
 
 
 def check_error(plan, page, *, require_present):
-    """Raise when a text check cannot be observed: prose value, or a selector absent from `page`.
+    """Raise when a check cannot be observed: prose text value, or a selector that matches nothing.
 
-    `require_present` applies to the page the checks were written for (the screen after replay);
-    otherwise only guessed positional selectors (tags/nth-of-type only) are rejected."""
-    selectors = {_canon(element["selector"]) for element in (page or {}).get("elements", [])}
-    selectors |= {_canon(selector) for selector in (page or {}).get("resolved_selectors", [])}
+    `require_present` applies to the page the checks were written for (the screen after replay):
+    a text check must match an element on that final screen; any other selector check (visible,
+    enabled, clipped, count, attribute, overlap) must match an element on it or after any earlier
+    replayed step (`matched_selectors`), because "not visible" on a selector that never existed is
+    not evidence. Otherwise (the entry page, before any interaction) only guessed positional text
+    check selectors (tags/nth-of-type only) are rejected."""
+    final = {_canon(element["selector"]) for element in (page or {}).get("elements", [])}
+    final |= {_canon(selector) for selector in (page or {}).get("resolved_selectors", [])}
+    replayed = final | {_canon(selector) for selector in (page or {}).get("matched_selectors", [])}
     for key in ("ready", "expected", "symptom"):
         check = getattr(plan, key)
-        if check is None or getattr(check, "kind", "text") != "text":
+        kind = getattr(check, "kind", "text")
+        if check is None or kind not in _CHECK_KINDS:
             continue
-        if prose_value(check.value):
+        if kind == "text" and prose_value(check.value):
             raise PlanValidationError("PLAN_PROSE_CHECK_VALUE", f"{key}.value")
-        if page is not None and _canon(check.selector) not in selectors and (
-                require_present or _STRUCTURAL.match(check.selector.strip())):
-            raise PlanValidationError("PLAN_UNGROUNDED_CHECK", f"{key}.selector")
+        if page is None:
+            continue
+        grounded = final if kind == "text" else replayed
+        for field in ("selector", "other_selector"):
+            selector = getattr(check, field, "")
+            if selector and _canon(selector) not in grounded and (
+                    require_present or (kind == "text" and _STRUCTURAL.match(selector.strip()))):
+                raise PlanValidationError("PLAN_UNGROUNDED_CHECK", f"{key}.{field}")
 
 
 def grounded_fallback(plan, final, entry, report):
