@@ -392,11 +392,13 @@ class QAService:
                                 if recorded:
                                     candidate = validate_candidate(compose(generated["plan"], recorded, request.entry_url),
                                         request.text(), entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms,
-                                        contract=replay_contract(recorded, contract))
+                                        contract=replay_contract(recorded, contract), targets=snapshot,
+                                        allow_text_targets=proposal == self.limits.max_plan_revisions)
                                     self._validate_plan(candidate)
                                     try:  # the model's own plan is the runtime fallback when a recorded target is gone
                                         fallback_plan = validate_candidate(generated["plan"], request.text(),
-                                            entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract)
+                                            entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract,
+                                            targets=snapshot, allow_text_targets=True)
                                         self._validate_plan(fallback_plan)
                                     except (PlanValidationError, ValueError):
                                         fallback_plan = None
@@ -405,7 +407,8 @@ class QAService:
                                         entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract,
                                         # The reached-screen heuristic only asks for a revision; the last
                                         # proposal runs as-is and a runtime navigation repair can still help.
-                                        page=snapshot if proposal < self.limits.max_plan_revisions else None)
+                                        page=snapshot if proposal < self.limits.max_plan_revisions else None,
+                                        targets=snapshot, allow_text_targets=proposal == self.limits.max_plan_revisions)
                                     self._validate_plan(candidate)
                                     contract = confirm_contract(candidate, contract, request.text())
                                     context = {**context, "scenario_contract": planner_contract(contract)}
