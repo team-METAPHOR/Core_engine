@@ -7,7 +7,8 @@ import threading
 import unittest
 
 from core_engine import BrowserOptions, JobStore, QARequest, QAService, RunPolicy
-from core_engine.replay import compose, replay_steps
+from core_engine import Step
+from core_engine.replay import compose, keep_replayed_prefix, replay_steps
 from qa_fixtures import ScriptedModel, analysis, check, intake
 from test_transport import local_policy
 
@@ -149,6 +150,19 @@ class ReplayStepsTests(unittest.TestCase):
         self.assertEqual([s['action'] for s in composed['steps']][-2:], ['fill', 'click'])
         self.assertEqual(composed['ready'], generated['ready'])
 
+    def test_fallback_keeps_the_replayed_prefix_and_takes_only_the_model_tail(self):
+        o = self.origin
+        replayed = (Step('navigate', o + '/app/cart'), Step('navigate', o + '/app'), Step('click', '#product'),
+                    Step('click', '#add'), Step('click', '#old-apply'))
+        own = (Step('navigate', o + '/app/cart'), Step('click', '#apply'))
+        self.assertEqual(keep_replayed_prefix(replayed, 4, own), (*replayed[:4], Step('click', '#apply')))
+        # The model re-walks the recorded path: only its steps after the last shared one are added.
+        own = (Step('navigate', o + '/app'), Step('click', '#product'), Step('click', '#add'), Step('click', '#apply'))
+        self.assertEqual(keep_replayed_prefix(replayed, 4, own), (*replayed[:4], Step('click', '#apply')))
+        # Nothing new to add, or the entry navigation itself failed: use the model plan as is.
+        self.assertIsNone(keep_replayed_prefix(replayed, 4, own[:3]))
+        self.assertIsNone(keep_replayed_prefix(replayed, 0, own))
+
 
 @unittest.skipUnless(importlib.util.find_spec('playwright'), 'install browser extra')
 class RecordedReplayBrowserTests(unittest.IsolatedAsyncioTestCase):
@@ -186,6 +200,21 @@ class RecordedReplayBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.report['repairs'][0]['kind'], 'replay_fallback')
             self.assertEqual(result.report['run']['verdict']['value'], 'reproduced')
             self.assertEqual(result.report['scenario']['steps'][-1]['target'], '[data-testid="apply-coupon"]')
+
+    async def test_bug41_fallback_keeps_the_replayed_prefix_instead_of_restarting_from_the_entry_page(self):
+        with shop_site() as (origin, cart):
+            # The model's own plan acts only on the (empty) report page, like production BUG-41.
+            own = model_plan(origin, clicks('[data-testid="apply-coupon"]'))
+            data = bug31_intake()
+            data['required_actions'] = []
+            result = await self.run_case(origin, cart, [data, own, analysis()],
+                                         activity(apply='[data-testid="apply-coupon-old"]'))
+            self.assertEqual(result.status, 'completed', result)
+            self.assertEqual(result.report['repairs'][0]['kind'], 'replay_fallback')
+            self.assertEqual(result.report['repairs'][0]['kept_steps'], 7)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced')
+            self.assertEqual([s['target'] for s in result.report['scenario']['steps']],
+                             [origin + '/app/cart', origin + '/app', *RECORDED[:-1], '[data-testid="apply-coupon"]'])
 
 
 if __name__ == '__main__':

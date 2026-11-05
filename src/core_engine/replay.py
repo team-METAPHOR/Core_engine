@@ -94,3 +94,20 @@ def compose(generated, steps, entry_url):
         clicks = [i + 1 if i >= index else i for i in clicks]
     return {"steps": [{"action": "navigate", "target": entry_url, "value": ""}, *replayed],
             **{key: generated[key] for key in ("ready", "expected", "symptom")}}
+
+
+def keep_replayed_prefix(replayed, failed_index, model_steps):
+    """Replay-fallback steps: the replayed steps before the failed one, then only the model's steps
+    after the last step it shares with that prefix. None when there is no usable prefix or tail
+    (the caller then runs the model's own plan)."""
+    if failed_index < 1:
+        return None
+    prefix = tuple(replayed[:failed_index])
+    seen = {(step.action, step.target) for step in prefix}
+    shared = [index for index, step in enumerate(model_steps) if (step.action, step.target) in seen]
+    if not shared:
+        return None
+    tail = tuple(model_steps[shared[-1] + 1:])
+    if not tail or len(prefix) + len(tail) > 20:
+        return None
+    return prefix + tail
