@@ -112,6 +112,8 @@ PYTHONPATH=src python -m core_engine.evaluation --live --repeats 3 --retest-fixe
 
 [첫 실제 AI 평가 결과](docs/evaluation-baseline-2026-11-05.md)에는 12개 사례를 각 3회 실행한 결과와 실패 원인을 공개합니다.
 
+[개선 전후 평가](docs/evaluation-improvement-2026-11-05.md)에는 동일 기준 재평가와 추가 8개 개발 사례의 결과, 남은 오류를 따로 기록합니다.
+
 ## 백엔드 호출
 
 ```python
