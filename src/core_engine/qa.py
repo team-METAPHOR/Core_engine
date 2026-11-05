@@ -57,6 +57,11 @@ def _replay_pages(final, snapshots):
     return pages[-MAX_REPLAY_PAGES:][::-1]
 
 
+def _gone(page, final):
+    present = {element["selector"] for element in final["elements"]}
+    return [element for element in page["elements"] if element["selector"] not in present]
+
+
 def _leads_toward(selector, snapshot, report):
     """A navigation click must share report words and be the best-matching link/control on the page."""
     reported = " ".join(report.values()).lower()
@@ -516,8 +521,10 @@ class QAService:
                             images = (recorder.image(final), *(recorder.image(page) for page in pages))
                             context = {**context, "page": _page_view(final), "image_order": ["page_after_replay", *(
                                            f"page_after_step_{page['step']}" for page in pages)],
+                                       # ponytail: only elements gone from the final screen; full pages
+                                       # overflow the 128 KiB model input on real sites.
                                        "replay_pages": [{"step": page["step"], "url": page["url"],
-                                                         "elements": page["elements"]} for page in pages],
+                                                         "elements": _gone(page, final)} for page in pages],
                                        "validation_feedback": feedback, "rejected_plan": encode_plan(plan),
                                        "previous_questions": []}
                             generated = await calls.invoke("plan_revision", PLAN_REVISION_PROMPT, context, proposal_schema, images)
