@@ -219,9 +219,14 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
         with site() as (origin, _, _):
             primary = ScriptedModel([intake(), plan(origin + '/app/mixed')])
             critic = ScriptedModel([ModelError('MODEL_RATE_LIMITED', retry_after_seconds=45)])
+            critic.model = 'configured-critic'
             result = await self.service(primary, origin, critic).run(self.request(origin), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.error_code, 'MODEL_RATE_LIMITED', result)
             self.assertEqual(result.report['model_calls'][-1]['retry_after_seconds'], 45)
+            self.assertEqual(result.report['model_calls'][-1]['configured_model'], 'configured-critic')
+            self.assertIsNone(result.report['model_calls'][-1]['model'])
+            self.assertIsNone(result.report['model_calls'][-1]['usage'])
+            self.assertEqual(result.report['diagnosis']['model_failures'][0]['phase'], 'plan_review')
             self.assertEqual(result.report['diagnosis']['next_actions'][0]['retry_after_seconds'], 45)
             self.assertEqual(result.report['plan_review']['status'], 'failed')
             self.assertIsNone(result.report['run'])

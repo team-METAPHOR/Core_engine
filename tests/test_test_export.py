@@ -42,6 +42,35 @@ class ExportTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which('node') and (JS / 'node_modules/@playwright/test/cli.js').is_file(),
                      'run npm ci --prefix tests/js for real TypeScript export verification')
 class ExecutedExportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_history_and_aria_export_same_test_fails_bug_passes_fixed(self):
+        from test_history_actions import history_site, history_plan
+        with history_site() as (origin, state):
+            for action in ('reload', 'back'):
+                source = export_playwright_test(history_plan(origin, action), policy=local_policy(origin))
+                for fixed in (False, True):
+                    state['fixed'] = fixed
+                    code, report = await self.execute(source)
+                    self.assertEqual(code, 0 if fixed else 1, report)
+                    self.assertIn('observed-outcomes', json.dumps(report))
+
+    async def test_url_path_export_supports_full_document_back(self):
+        from test_history_actions import history_site
+        with history_site() as (origin, _):
+            scenario = BrowserPlan((Step('navigate', origin + '/app/history'),
+                Step('navigate', origin + '/app/other'), Step('back', '')),
+                Check('text', '#ready', 'loaded'), Check('url_path', '', '/app/other'),
+                expected=Check('url_path', '', '/app/history'))
+            code, report = await self.execute(export_playwright_test(scenario, policy=local_policy(origin)))
+            self.assertEqual(code, 0, report)
+
+    async def test_export_without_history_reports_unavailable(self):
+        from test_history_actions import history_site, history_plan
+        with history_site() as (origin, _):
+            scenario = replace(history_plan(origin, 'back'), steps=(Step('navigate', origin + '/app/history'), Step('back', '')))
+            code, report = await self.execute(export_playwright_test(scenario, policy=local_policy(origin)))
+            self.assertEqual(code, 1, report)
+            self.assertIn('HISTORY_UNAVAILABLE', json.dumps(report))
+
     async def test_approved_writes_export_uses_named_reset_and_observes_bug_and_fix(self):
         from test_request_scheduling import browser_site, approved, cart_plan
         with browser_site() as (origin, state), tempfile.TemporaryDirectory() as temporary:

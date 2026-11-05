@@ -3,6 +3,28 @@ from core_engine.diagnosis import build_diagnosis
 
 
 class DiagnosisTests(unittest.TestCase):
+    def test_later_model_failure_does_not_hide_browser_failure(self):
+        result = build_diagnosis({'status': 'failed', 'error_code': 'MODEL_CALL_LIMIT',
+            'model_limit_events': [{'phase': 'report', 'role': 'primary', 'configured_model': 'configured-test',
+                                    'error_code': 'MODEL_CALL_LIMIT', 'call_started': False}],
+            'run': {'verdict': {'value': 'inconclusive'}, 'evidence': [
+                {'id': 'ev', 'attempt': 1, 'completed_steps': 0, 'ready': False,
+                 'symptom_observed': None, 'blocker': 'TRANSPORT_ERROR'}]}})
+        self.assertEqual(result['category'], 'environment_blocked')
+        self.assertEqual(result['reason_codes'], ['TRANSPORT_ERROR', 'MODEL_CALL_LIMIT'])
+        self.assertIn('통신', result['summary'])
+        self.assertIn('후속', result['summary'])
+        self.assertEqual(result['model_failures'][0]['phase'], 'report')
+        self.assertFalse(result['model_failures'][0]['call_started'])
+
+    def test_provider_and_job_budget_failures_have_distinct_explanations(self):
+        rate = build_diagnosis({'status': 'failed', 'error_code': 'MODEL_RATE_LIMITED'})
+        for code in ('MODEL_CALL_LIMIT', 'MODEL_TOKEN_LIMIT'):
+            budget = build_diagnosis({'status': 'failed', 'error_code': code})
+            self.assertEqual(budget['category'], 'model_budget_exhausted')
+            self.assertNotEqual(rate['summary'], budget['summary'])
+            self.assertIn('별개', budget['next_actions'][0]['message'])
+
     def test_rate_limit_keeps_provider_wait_hint_without_inventing_a_retry(self):
         result = build_diagnosis({'status': 'failed', 'error_code': 'MODEL_RATE_LIMITED',
             'model_calls': [{'status': 'MODEL_RATE_LIMITED', 'role': 'critic', 'retry_after_seconds': 32.5}]})

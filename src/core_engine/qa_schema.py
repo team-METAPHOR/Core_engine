@@ -1,7 +1,7 @@
 """Strict contracts for screenshot interpretation, test planning and locator repair."""
 
 from .analysis_schema import _array, _enum, _object, _text
-from .checks import Check
+from .checks import Check, STATE_ATTRIBUTES
 from .plan import BrowserPlan, Step
 
 
@@ -23,6 +23,7 @@ INTAKE_SCHEMA = _object(
         _object(action=_enum("click"), value=_enum(""), source_quote=_text(800)),
         _object(action=_enum("fill"), value=optional_text(2000), source_quote=_text(800)),
         _object(action=_enum("navigate"), value=_text(2000), source_quote=_text(800)),
+        _object(action=_enum("reload", "back"), value=_enum(""), source_quote=_text(800)),
     ]}, 18),
     actions_complete={"type": "boolean"},
     completion_signal={"anyOf": [_object(value=_text(300), source_quote=_text(800)), {"type": "null"}]},
@@ -35,10 +36,14 @@ CHECK_SCHEMA = {"anyOf": [
     _object(kind=_enum("overlap"), selector=_text(256), value=_enum("true", "false"), other_selector=_text(256)),
     _object(kind=_enum("count"), selector=_text(256), value=_text(4), other_selector=_enum("")),
     _object(kind=_enum("response_status"), selector=_text(256), value=_text(3), other_selector=_enum("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")),
+    _object(kind=_enum("url_path"), selector=_enum(""), value=_text(2000), other_selector=_enum("")),
+    *[_object(kind=_enum("attribute"), selector=_text(256), value=_enum(*values), other_selector=_enum(name))
+      for name, values in STATE_ATTRIBUTES.items()],
 ]}
 ACTION_SCHEMA = {"anyOf": [
     _object(action=_enum("navigate", "click"), target=_text(2048), value=_enum("")),
     _object(action=_enum("fill", "assert_text"), target=_text(2048), value=optional_text(2000)),
+    _object(action=_enum("reload", "back"), target=_enum(""), value=_enum("")),
 ]}
 PLAN_DATA_SCHEMA = _object(
     steps=_array(ACTION_SCHEMA, 20, 1),
@@ -52,6 +57,7 @@ PLAN_SCHEMA = _object(
         setup_steps={**_array(ACTION_SCHEMA, 18),
                      "description": "Only preparation BEFORE final_action. Do NOT repeat final_action here. A single-click report has no setup click."},
         final_action={"anyOf": [ACTION_SCHEMA["anyOf"][0],
+                               ACTION_SCHEMA["anyOf"][2],
                                _object(action=_enum("fill"), target=_text(2048), value=optional_text(2000))],
                       "description": "The last REPORTED action that produces the state to observe. Never add a click just to check enabled/visible."},
         ready=PLAN_DATA_SCHEMA["properties"]["ready"],
@@ -84,7 +90,7 @@ def repair_schema(selectors):
 def decode_plan(data: dict, *, entry_url=None, timeout_ms=3000) -> BrowserPlan:
     steps = tuple(Step(item["action"], item["target"], item["value"] if item["action"] in {"fill", "assert_text"} else None)
                   for item in data["steps"])
-    if any(item["value"] for item in data["steps"] if item["action"] in {"navigate", "click"}):
+    if any(item["value"] for item in data["steps"] if item["action"] not in {"fill", "assert_text"}):
         raise ValueError("non-input action cannot carry a value")
     if steps and steps[-1].action == "assert_text":
         raise ValueError("final observations belong in ready/expected/symptom, not an assertion step")
@@ -130,8 +136,9 @@ Extract required_actions from the original report, in order, with exact source_q
 the supplied report fields. Classify reading/checking/waiting as observe, not as an interaction.
 Use fill.value only for a literal included in that quote; click/observe value is empty. For navigate,
 value is the exact reported destination URL or /path. Omit the host-provided initial page navigation.
-Include a later navigate/reload only
-when explicitly reported. Do not invent implicit clicks: a report saying 'search A then B' does not
+Use reload for an explicitly reported browser refresh, back for browser history back (not a named UI
+Back button). Both carry value="" and a quoted report instruction. Do not replace them with navigate.
+Include a later navigate/reload/back only when explicitly reported. Do not invent implicit clicks: a report saying 'search A then B' does not
 necessarily specify how submission happens. Set actions_complete=true only when the exact full UI
 action sequence is explicit, or a static observation needs no interaction; otherwise false. Preserve
 explicit repeat counts. A one-click report requires one click, not two. These requirements constrain
@@ -163,7 +170,9 @@ Images are ordered as indicated by image_order: the current page is the initial 
 screenshot (when supplied) shows the reported symptom. Use DOM boundaries to distinguish adjacent text;
 do not concatenate text from different elements into one selector's expected value.
 Use stable CSS selectors from the observed DOM where possible. No XPath, code, sleeps, random probing,
-security testing or destructive actions. Steps: navigate, fill, click, assert_text. At most 20 steps.
+security testing or destructive actions. Steps: navigate, reload, back, fill, click, assert_text. At most 20 steps.
+reload/back use target="", value="" and preserve real document/history behavior; only use them when
+the grounded report requires them. They must not be substituted with a navigate to the same URL.
 Separate the plan into setup_steps and final_action. setup_steps contains ONLY preparations BEFORE
 the final reported action. final_action is that last trigger, not an attempt to confirm its outcome.
 For a static issue: setup_steps=[], final_action=navigate. For an input-dependent enabled state:
@@ -181,13 +190,20 @@ to entry_url. Never navigate elsewhere merely to satisfy this format.
 The ready check must prove the final action is complete, not just that the page loaded. For intermediate
 actions use assert_text to wait for completion. Prefer an explicit completion signal described in the
 report; the current snapshot's initial/loading text is not evidence of completion after the final action.
-The last step MUST be navigate, fill or click, never assert_text. Final outcome assertions belong ONLY
+The last step MUST be navigate, reload, back, fill or click, never assert_text. Final outcome assertions belong ONLY
 in expected/symptom, so both buggy and corrected behavior can reach the observation stage. Readiness
 must be independent of which outcome occurs. Do not equate loading or request failure with a bug.
 Define BOTH expected and symptom predicates; exactly one must hold for a conclusive observation.
 Kinds: text equals inner text; visible/enabled uses true/false; count uses an integer string;
 overlap is visible bounding-box intersection (>1px) and requires other_selector; clipped detects viewport
-overflow or scroll size exceeding client size. Other kinds require other_selector="".
+overflow or scroll size exceeding client size. url_path compares the exact pathname only (no query or
+fragment), uses selector="", value="/reported/path", other_selector="". attribute compares one explicit
+ARIA state using other_selector=aria-pressed/aria-checked/aria-expanded/aria-selected/aria-busy/aria-disabled
+and value=true/false (mixed only for pressed/checked). A missing attribute is inconclusive, not false.
+Use snapshot state_attributes as evidence of available state predicates. Other kinds require other_selector="".
+Never use body/html/* for exact text checks or assert_text: use the specific observed status/price/row
+element. Exact equality of a short status against a whole page is not a completion signal. Do not
+invent a later page's selectors from the first screenshot; unsupported/missing targets need evidence.
 The text check reads underlying innerText, which usually still contains the FULL string even when
 CSS crops it. It cannot detect visual cropping: use clipped for cropped text, overlap for intersecting
 controls, enabled for disabled controls, visible for hidden elements, and count for duplicate items.
@@ -228,7 +244,7 @@ and let browser evidence determine whether it reproduces. Ask only for essential
 If the issue requires unsupported gestures, cross-frame access, uncertain timing, missing test data,
 or cannot be expressed with these checks, return needs_info, plan=null and precise questions.
 Do not invent API responses or assume a query has no results without supplied test data/requirements.
-Values for click/navigate must be empty. Never type passwords, session tokens or personal data.
+Values for click/navigate/reload/back must be empty. Never type passwords, session tokens or personal data.
 """
 PLAN_REVISION_PROMPT = PLAN_PROMPT + """
 The previous proposal was rejected BEFORE reproduction started. validation_feedback identifies a host

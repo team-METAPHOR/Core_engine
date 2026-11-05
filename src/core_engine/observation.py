@@ -115,6 +115,10 @@ _ELEMENTS = """sensitive => {
             role: el.getAttribute('role') || '', name: (el.getAttribute('aria-label') || (el.labels?.[0] ? safeText(el.labels[0]) : '')).slice(0,120),
             text: /^(input|textarea|select)$/.test(el.localName) ? '' : safeText(el),
             enabled: !el.disabled, input_type: el.localName === 'input' ? el.type : '',
+            state_attributes: Object.fromEntries(['aria-pressed','aria-checked','aria-expanded',
+                'aria-selected','aria-busy','aria-disabled'].map(key => [key, el.getAttribute(key)])
+                .filter(([key, value]) => ['true','false'].includes(value)
+                    || (['aria-pressed','aria-checked'].includes(key) && value === 'mixed'))),
             bounds: {x:round(r.x), y:round(r.y), width:round(r.width), height:round(r.height)},
             client_size: {width:el.clientWidth, height:el.clientHeight},
             scroll_size: {width:el.scrollWidth, height:el.scrollHeight}};

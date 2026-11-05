@@ -8,6 +8,16 @@ from urllib.parse import urlsplit
 from .policy import PolicyError, SAFE_METHODS, STATE_CHANGING_METHODS, canonical_url
 
 
+STATE_ATTRIBUTES = {
+    "aria-pressed": ("true", "false", "mixed"),
+    "aria-checked": ("true", "false", "mixed"),
+    "aria-expanded": ("true", "false"),
+    "aria-selected": ("true", "false"),
+    "aria-busy": ("true", "false"),
+    "aria-disabled": ("true", "false"),
+}
+
+
 @dataclass(frozen=True)
 class Check:
     kind: str
@@ -16,9 +26,9 @@ class Check:
     other_selector: str = ""
 
     def __post_init__(self):
-        if self.kind not in {"text", "visible", "enabled", "count", "overlap", "clipped", "response_status"}:
+        if self.kind not in {"text", "visible", "enabled", "count", "overlap", "clipped", "response_status", "url_path", "attribute"}:
             raise ValueError("unsupported UI check")
-        if not isinstance(self.selector, str) or not 1 <= len(self.selector) <= 256:
+        if not isinstance(self.selector, str) or not (0 if self.kind == "url_path" else 1) <= len(self.selector) <= 256:
             raise ValueError("invalid check selector")
         if not isinstance(self.value, str) or len(self.value) > 2000:
             raise ValueError("invalid check value")
@@ -28,7 +38,13 @@ class Check:
             raise ValueError("count must be 0..1000")
         if not isinstance(self.other_selector, str) or len(self.other_selector) > 256:
             raise ValueError("invalid secondary selector")
-        if self.kind == "response_status":
+        if self.kind == "url_path":
+            if self.selector or self.other_selector or not self.value.startswith("/") or "?" in self.value or canonical_url("https://scope.invalid" + self.value) != "https://scope.invalid" + self.value:
+                raise ValueError("URL check requires only an exact canonical path value")
+        elif self.kind == "attribute":
+            if self.other_selector not in STATE_ATTRIBUTES or self.value not in STATE_ATTRIBUTES[self.other_selector]:
+                raise ValueError("attribute check requires an allowlisted ARIA state and value")
+        elif self.kind == "response_status":
             if self.other_selector not in SAFE_METHODS | STATE_CHANGING_METHODS or not self.value.isascii() or not self.value.isdigit() or not 100 <= int(self.value) <= 599:
                 raise ValueError("response check needs an allowed method and HTTP status")
             if not self.selector.startswith("/") or "?" in self.selector or canonical_url("https://scope.invalid" + self.selector) != "https://scope.invalid" + self.selector:
@@ -42,6 +58,8 @@ async def observe_check(page, check, network=None) -> bool:
     if not isinstance(check, Check):
         # Legacy TextCheck keeps its visible-element semantics.
         check = Check("text", check.selector, check.text)
+    if check.kind == "url_path":
+        return urlsplit(page.url).path == check.value
     if check.kind == "response_status":
         matching = [item for item in (network or []) if item["method"] == check.other_selector
                     and urlsplit(item["url"]).path == check.selector]
@@ -61,6 +79,11 @@ async def observe_check(page, check, network=None) -> bool:
         raise PolicyError("CHECK_TARGET_UNAVAILABLE")
     if check.kind == "text":
         return (await locator.inner_text()).strip() == check.value.strip()
+    if check.kind == "attribute":
+        actual = await locator.get_attribute(check.other_selector)
+        if actual not in STATE_ATTRIBUTES[check.other_selector]:
+            raise PolicyError("CHECK_ATTRIBUTE_UNAVAILABLE")
+        return actual == check.value
     if check.kind == "enabled":
         actual = await locator.is_enabled()
     elif check.kind == "overlap":
@@ -90,7 +113,7 @@ async def wait_for_check(page, check, timeout_ms, guard, network=None):
             if await observe_check(page, check, network):
                 return
         except PolicyError as exc:
-            if exc.code not in {"CHECK_TARGET_UNAVAILABLE", "RESPONSE_NOT_OBSERVED"}:
+            if exc.code not in {"CHECK_TARGET_UNAVAILABLE", "CHECK_ATTRIBUTE_UNAVAILABLE", "RESPONSE_NOT_OBSERVED"}:
                 raise
         if time.monotonic() >= deadline:
             raise PolicyError("STEP_OR_READINESS_FAILED")

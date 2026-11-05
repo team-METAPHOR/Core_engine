@@ -34,6 +34,31 @@ class QATests(unittest.IsolatedAsyncioTestCase):
         return QAService(model, local_policy(origin), self.store,
                          options=BrowserOptions(step_timeout_ms=150), **kwargs)
 
+    async def test_reported_reload_flows_through_planning_report_export_and_retest(self):
+        from core_engine.qa_schema import encode_plan
+        from test_history_actions import history_site, history_plan
+        with history_site() as (origin, state):
+            interpreted = intake()
+            interpreted.update(required_actions=[
+                {'action': 'click', 'value': '', 'source_quote': 'Select 클릭'},
+                {'action': 'reload', 'value': '', 'source_quote': '새로고침'}], actions_complete=True)
+            generated = {'status': 'ready', 'questions': [], 'rationale': 'reported reload',
+                         'plan': encode_plan(history_plan(origin))}
+            model = ScriptedModel([interpreted, generated, analysis(), analysis()])
+            request = QARequest('report-history', 'demo', origin + '/app/history', screenshot(),
+                                'Select 클릭 후 새로고침 시 선택이 풀림', '선택 유지', '')
+            service = self.service(model, origin)
+            result = await service.run(request, reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.status, 'completed', result)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced')
+            self.assertEqual(result.report['scenario']['steps'][-1]['action'], 'reload')
+            self.assertIn('새로고침', self.store.read(result.job_id, 'report.md').decode())
+            self.assertEqual(result.report['test_export']['status'], 'ready')
+            state['fixed'] = True
+            retest = await service.retest(result.job_id, reset=reset, is_authorized=lambda: True)
+            self.assertEqual(retest.report['run']['verdict']['value'], 'not_reproduced', retest)
+            self.assertEqual(result.report['plan_sha256'], retest.report['plan_sha256'])
+
     async def test_screenshot_to_reproduced_report_and_retest_fixed(self):
         with site() as (origin, _, state):
             model = ScriptedModel([intake(), plan(origin + '/app/mixed'), analysis(), analysis()])
@@ -201,6 +226,8 @@ class QATests(unittest.IsolatedAsyncioTestCase):
                 self.request(origin), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.error_code, 'MODEL_CALL_LIMIT', result)
             self.assertEqual(len(model.calls), 1)
+            self.assertEqual(result.report['model_limit_events'][0]['phase'], 'plan')
+            self.assertFalse(result.report['model_limit_events'][0]['call_started'])
 
     async def test_revocation_during_model_call_stops_before_browser(self):
         with site() as (origin, hits, _):

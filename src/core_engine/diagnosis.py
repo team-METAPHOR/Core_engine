@@ -4,6 +4,15 @@ from .redaction import redact_text
 
 
 _REASONS = {
+    "TRANSPORT_ERROR": ("environment_blocked", "대상 서버와 통신하는 중 오류가 발생했습니다.", "워커의 실제 접속 주소·DNS·TLS·서버 로그를 확인해주세요. 이 코드만으로 원인을 확정할 수 없습니다."),
+    "TLS_CERTIFICATE_ERROR": ("environment_blocked", "대상 서버의 TLS 인증서를 검증하지 못했습니다.", "인증서의 유효기간·호스트 이름·신뢰 체인을 확인해주세요. 인증서 검증을 끄지 않습니다."),
+    "TLS_HANDSHAKE_ERROR": ("environment_blocked", "대상 서버와 TLS 연결을 수립하지 못했습니다.", "HTTPS 포트와 서버 TLS 구성을 확인해주세요."),
+    "CONNECTION_REFUSED": ("environment_blocked", "대상 서버가 연결을 거절했습니다.", "대상 서비스의 실행 상태·포트·네트워크 접근 설정을 확인해주세요."),
+    "CONNECTION_RESET": ("environment_blocked", "대상 서버와의 연결이 응답 도중 끊겼습니다.", "서버·프록시의 연결 종료와 같은 시점의 로그를 확인해주세요."),
+    "HISTORY_UNAVAILABLE": ("execution_blocked", "뒤로 갈 브라우저 방문 기록이 없습니다.", "새 세션에서 시작하는 재현 순서에 이전 화면 진입 동작이 포함됐는지 확인해주세요."),
+    "CHECK_ATTRIBUTE_UNAVAILABLE": ("execution_blocked", "검사할 ARIA 상태 속성이 없거나 지원하는 값이 아닙니다.", "실제 화면의 상태 속성과 검사 대상을 확인해주세요. 속성이 없는 것을 false로 판정하지 않습니다."),
+    "MODEL_CALL_LIMIT": ("model_budget_exhausted", "이 QA 작업에 설정된 AI 호출 횟수 한도에 도달했습니다.", "작업별 호출 기록과 계획 수정 횟수를 확인해주세요. 공급자의 분당 제한과는 별개입니다."),
+    "MODEL_TOKEN_LIMIT": ("model_budget_exhausted", "이 QA 작업에 설정된 누적 토큰 한도에 도달했습니다.", "작업별 토큰 사용량과 입력 크기를 확인해주세요. 공급자의 분당 제한과는 별개입니다."),
     "NAVIGATION_TIMEOUT": ("environment_blocked", "페이지 로딩 제한 시간 안에 이동을 완료하지 못했습니다.", "테스트 서버와 정적 리소스 로딩 시간을 확인하고 페이지 이동 제한을 조정해주세요."),
     "TRANSPORT_TIMEOUT": ("environment_blocked", "대상 서버의 연결 또는 응답 대기 시간이 초과됐습니다.", "서버 지연과 요청 제한 시간을 확인해주세요."),
     "STATE_RESET_REQUIRED": ("environment_blocked", "승인된 상태 변경에 연결된 서버 초기화 어댑터가 없습니다.", "프로그램에 등록된 어댑터 ID와 일치하는 StateReset을 워커에서 전달해주세요."),
@@ -38,8 +47,14 @@ def build_diagnosis(report):
     run = report.get("run") or {}
     verdict = (run.get("verdict") or {}).get("value")
     evidence = run.get("evidence", [])
-    codes = list(dict.fromkeys([code for code in [report.get("error_code"),
-        *(e.get("blocker") for e in evidence)] if code]))
+    # A later repair/report model failure must not replace the actual browser blockers.
+    task_error = report.get("error_code")
+    browser_codes = [e.get("blocker") for e in evidence]
+    ordered = [*browser_codes, task_error] if str(task_error).startswith("MODEL_") else [task_error, *browser_codes]
+    codes = list(dict.fromkeys(code for code in ordered if code))
+    model_failures = [{key: call.get(key) for key in ("phase", "role", "configured_model", "model", "status", "retry_after_seconds")}
+        for call in report.get("model_calls", []) if str(call.get("status", "")).startswith("MODEL_")]
+    model_failures += [{**event, "status": event.get("error_code")} for event in report.get("model_limit_events", [])]
     questions = list(report.get("questions") or [])
     facts, seen, statuses = [], set(), set()
     for snapshot in report.get("observations", []):
@@ -71,6 +86,8 @@ def build_diagnosis(report):
         if codes and codes[0].startswith("MODEL_") and codes[0] not in _REASONS:
             category, summary = "model_unavailable", "AI 처리 또는 작업의 모델 사용 예산 문제로 중단됐습니다."
     actions = []
+    if evidence and (model_failures or str(report.get("error_code", "")).startswith("MODEL_")):
+        summary += " AI 후속 처리에도 오류 또는 한도가 있어 실행 증거와 모델 오류를 함께 확인해야 합니다."
     blocked = [item for e in evidence for item in e.get("blocked_requests", [])]
     blocked += [r for s in report.get("observations", []) for r in s.get("network", [])
                 if r.get("non_fatal") and r.get("blocker") in {"ORIGIN_OUT_OF_SCOPE", "PATH_OUT_OF_SCOPE"}]
@@ -116,6 +133,7 @@ def build_diagnosis(report):
             "elapsed_seconds": item.get("elapsed_seconds"), "evidence_ids": [item["id"]],
             "observation_ids": list(item.get("observation_ids", []))})
     return {"category": category, "summary": summary, "reason_codes": codes,
+            "model_failures": model_failures,
             "root_cause_confirmed": False, "attempts": attempts, "observed_facts": facts,
             "missing_information": questions, "next_actions": actions,
             "hypotheses": (report.get("analysis") or {}).get("hypotheses", []),

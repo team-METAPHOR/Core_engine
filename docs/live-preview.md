@@ -92,7 +92,7 @@ finally:
 | `preview_warning` | `error_code`: `LIVE_FRAME_TOO_LARGE`, `LIVE_FRAME_ENCODING_FAILED`, `LIVE_CAPTURE_INTERRUPTED` |
 | `end` | `status`, `error_code`. 일반 종료는 결과/보고서 파일 저장 후 전송. 저장 실패 등 예외는 `interrupted`/`LIVE_RUN_INTERRUPTED` |
 
-`attempt=0`은 계획을 위한 최초 관찰이고 1·2는 독립 재현 시도입니다. `revision=-1`은 최초 관찰, 0 이상은 재현 계획 버전입니다. 단계 인덱스는 0부터 시작하고 해당하지 않으면 null입니다. `action`은 `navigate`, `click`, `fill`, `assert_text` 또는 null입니다. URL·선택자·입력값·신고 원문·AI 응답·로그인 정보는 메시지 메타데이터에 넣지 않습니다.
+`attempt=0`은 계획을 위한 최초 관찰이고 1·2는 독립 재현 시도입니다. `revision=-1`은 최초 관찰, 0 이상은 재현 계획 버전입니다. 단계 인덱스는 0부터 시작하고 해당하지 않으면 null입니다. `action`은 `navigate`, `click`, `fill`, `assert_text`, `reload`, `back` 또는 null입니다(`reload`/`back`은 0.7.0부터). URL·선택자·입력값·신고 원문·AI 응답·로그인 정보는 메시지 메타데이터에 넣지 않습니다.
 
 주요 `progress.phase`: `attempt_started`, `login`, `discovery`, `action`, `action_completed`, `readiness`, `outcome`, `completed`, `attempt_finished`, `attempt_failed`.
 

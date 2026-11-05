@@ -295,6 +295,37 @@ class GuardedPage:
             raise PolicyError("NAVIGATION_FAILED")
         self.check()
 
+    async def history_action(self, action):
+        """Real reload/back, including same-document history; retain every route guard."""
+        if action not in {"reload", "back"}:
+            raise ValueError("unsupported history action")
+        self.check()
+        self.transport.policy.check_url(self.page.url)
+        from playwright.async_api import TimeoutError as BrowserTimeout
+        navigations = []
+        def navigated(frame):
+            if frame == self.page.main_frame:
+                navigations.append(True)
+        self.page.on("framenavigated", navigated)
+        try:
+            operation = self.page.reload if action == "reload" else self.page.go_back
+            response = await operation(wait_until="load", timeout=self.options.navigation_timeout_ms)
+            self.check()
+            if action == "back" and self.page.url == "about:blank":
+                raise PolicyError("HISTORY_UNAVAILABLE")
+            # go_back returns None both for no history and for same-document history.
+            if response is None and not navigations:
+                raise PolicyError("HISTORY_UNAVAILABLE" if action == "back" else "NAVIGATION_FAILED")
+            if response is not None and response.status >= 400:
+                raise PolicyError("NAVIGATION_FAILED")
+            # pushState/back and cached documents may not make a routed HTTP request.
+            self.transport.policy.check_url(self.page.url)
+        except BrowserTimeout:
+            self.check()
+            raise PolicyError("NAVIGATION_TIMEOUT") from None
+        finally:
+            self.page.remove_listener("framenavigated", navigated)
+
     async def capture(self, attempt, step, phase):
         if self.recorder is None or self.page.url == "about:blank" or self._login_screen():
             return None

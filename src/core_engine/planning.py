@@ -11,7 +11,8 @@ FEEDBACK = {
     "PLAN_UNSUPPORTED_INPUT": "A fill value is absent from the supplied report/test_data. Copy the supplied literal exactly or ask for missing input data.",
     "PLAN_REPORTED_COMPLETION_CHANGED": "Preserve the exact grounded completion_signal from scenario_contract in the ready text predicate.",
     "PLAN_REPORTED_SEQUENCE_CHANGED": "Preserve scenario_contract.required_actions in order, including literal inputs and repeat counts. Do not add interactions when actions_complete is true.",
-    "PLAN_UNSUPPORTED_NAVIGATION": "Remove navigation/reload after the initial entry unless it is explicitly grounded in the reported required_actions. It can reset the state under test.",
+    "PLAN_UNSUPPORTED_NAVIGATION": "Remove navigation/reload/back after the initial entry unless it is explicitly grounded in the reported required_actions. It can reset the state under test.",
+    "PLAN_OVERBROAD_TEXT_TARGET": "Exact text equality against body/html/* is not a targeted assertion. Select the observed status/price/row element without changing the expected text or meaning.",
     "PLAN_UNSUPPORTED_RESPONSE_CHECK": "A response_status path/status must be explicitly supplied in the report/test_data; do not invent an endpoint or HTTP result.",
     "PLAN_UNREPORTED_REPEAT": "Do not duplicate the final trigger in both setup_steps and final_action. Consecutive identical interactions require explicitly repeated required_actions from the report.",
 }
@@ -41,9 +42,13 @@ def validate_candidate(data, report, *, entry_url, timeout_ms, contract=None):
     supplied = tuple(report.values())
     for key in ("ready", "expected", "symptom"):
         check = getattr(plan, key)
+        if check.kind == "text" and check.selector.strip().lower() in {"body", "html", "*", ":root", "html > body"}:
+            raise PlanValidationError("PLAN_OVERBROAD_TEXT_TARGET", key)
         if check.kind == "response_status" and not all(any(value in field for field in supplied) for value in (check.selector, check.value)):
             raise PlanValidationError("PLAN_UNSUPPORTED_RESPONSE_CHECK", key)
     for index, step in enumerate(plan.steps):
+        if step.action == "assert_text" and step.target.strip().lower() in {"body", "html", "*", ":root", "html > body"}:
+            raise PlanValidationError("PLAN_OVERBROAD_TEXT_TARGET", f"steps.{index}.target")
         if step.action == "fill" and step.value and not any(step.value in field for field in supplied):
             raise PlanValidationError("PLAN_UNSUPPORTED_INPUT", f"steps.{index}.value")
     return plan

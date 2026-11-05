@@ -16,7 +16,7 @@ def ground_contract(intake, report):
         value = item.get("value", "")
         if value and value not in quote:
             raise ValueError("scenario requirement value is not grounded in its quote")
-        if item.get("action") in {"click", "observe"} and value:
+        if item.get("action") in {"click", "observe", "reload", "back"} and value:
             raise ValueError("click/observation requirements do not carry input values")
         if item.get("action") == "navigate":
             target = "https://scope.invalid" + value if value.startswith("/") and not value.startswith("//") else value
@@ -62,7 +62,7 @@ def planning_schema(schema, contract):
         branch["properties"]["value"] = {"type": "string", "enum": [contract["completion_signal"]["value"]]}
         fields["ready"] = branch
     actions = contract["required_actions"]
-    kinds = {"click", "fill", "navigate"}
+    kinds = {"click", "fill", "navigate"} | {item["action"] for item in actions if item["action"] in {"reload", "back"}}
     if contract["actions_complete"]:
         kinds = {actions[-1]["action"]} if actions else {"navigate"}
     elif actions and not any(item["action"] == "navigate" for item in actions):
@@ -83,6 +83,9 @@ def contract_error(plan, contract):
         return None
     actual = [step for step in plan.steps[1:] if step.action != "assert_text"]
     required = contract["required_actions"]
+    for action in ("reload", "back"):
+        if sum(step.action == action for step in actual) > sum(item["action"] == action for item in required):
+            return "PLAN_UNSUPPORTED_NAVIGATION", "steps"
     repeat = 1
     for index, step in enumerate(actual):
         repeat = repeat + 1 if index and step == actual[index - 1] else 1
