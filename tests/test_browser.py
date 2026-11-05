@@ -71,7 +71,7 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         with site() as (origin, hits, _):
             async def reset(_):
                 return True
-            for path in ("/app/post", "/app/outside", "/app/websocket", "/app/redirect"):
+            for path in ("/app/post", "/app/websocket", "/app/redirect"):
                 plan = BrowserPlan((Step("navigate", origin + path),), TextCheck("#ready", "ready"), TextCheck("#result", "cat"))
                 result = await BrowserRunner(local_policy(origin)).run(plan, reset=reset, is_authorized=lambda: True)
                 self.assertEqual(result.verdict.value, "inconclusive", (path, result))

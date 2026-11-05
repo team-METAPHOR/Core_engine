@@ -6,7 +6,7 @@ import threading
 import unittest
 
 from core_engine import (BrowserOptions, BrowserRunner, ConditionLimits, ConditionsService,
-    JobStore, ModelError, QARequest, Recorder, TestCondition)
+    JobStore, ModelError, QARequest, Recorder, TestCondition, StateChangePolicy, StateReset)
 from core_engine.evaluation.condition_site import condition_site, response_plan
 from core_engine.qa_schema import encode_plan
 from qa_fixtures import ScriptedModel, analysis, intake
@@ -40,6 +40,27 @@ class ConditionTests(unittest.IsolatedAsyncioTestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.store = JobStore(temporary.name)
+
+    async def test_named_state_reset_binding_survives_matrix_and_retest(self):
+        with condition_site() as (origin, policy, state, _):
+            policy = replace(policy, state_changes=StateChangePolicy('test', 'condition-reset', (('POST', '/app/api/preview'),)))
+            calls = []
+            async def reset_state(condition_id, ordinal):
+                calls.append((condition_id, ordinal))
+                return True
+            model = ScriptedModel(model_responses(origin) + [analysis()])
+            service = ConditionsService(model, policy, self.store, (TestCondition('staff', '직원', options()),))
+            rejected = await service.run(request(origin), reset=reset_state, is_authorized=lambda: True, select=False)
+            self.assertEqual(rejected.report['error_code'], 'STATE_RESET_REQUIRED')
+            self.assertEqual(calls, [])
+            self.assertEqual(model.calls, [])
+            named = StateReset('condition-reset', reset_state)
+            result = await service.run(request(origin), reset=named, is_authorized=lambda: True, select=False)
+            self.assertEqual(result.report['matched_condition_ids'], ['staff'], result)
+            state['buggy'] = False
+            fixed = await service.retest(result.job_id, 'staff', reset=named, is_authorized=lambda: True)
+            self.assertEqual(fixed.report['regression'], 'resolved_in_test')
+            self.assertEqual(calls, [('staff', n) for n in (0, 1, 2, 1, 2)])
 
     async def test_role_comparison_includes_normal_bug_blocked_and_fixed_retest(self):
         with condition_site() as (origin, policy, state, _):

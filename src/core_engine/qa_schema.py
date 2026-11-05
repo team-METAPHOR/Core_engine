@@ -34,7 +34,7 @@ CHECK_SCHEMA = {"anyOf": [
             value=_enum("true", "false"), other_selector=_enum("")),
     _object(kind=_enum("overlap"), selector=_text(256), value=_enum("true", "false"), other_selector=_text(256)),
     _object(kind=_enum("count"), selector=_text(256), value=_text(4), other_selector=_enum("")),
-    _object(kind=_enum("response_status"), selector=_text(256), value=_text(3), other_selector=_enum("GET", "HEAD", "OPTIONS")),
+    _object(kind=_enum("response_status"), selector=_text(256), value=_text(3), other_selector=_enum("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")),
 ]}
 ACTION_SCHEMA = {"anyOf": [
     _object(action=_enum("navigate", "click"), target=_text(2048), value=_enum("")),
@@ -197,10 +197,13 @@ and symptom is overlap=true. A control that should be enabled has expected enabl
 enabled=false. For a banner that should disappear, expected visible=false and symptom visible=true.
 Keep normal and defective meanings fixed even if the current page already looks corrected.
 For a specifically reported HTTP response, response_status uses selector=exact same-origin path,
-other_selector=GET/HEAD/OPTIONS, value=three-digit status. Both path and status must be explicitly in
+other_selector=the approved HTTP method, value=three-digit status. Both path and status must be explicitly in
 the report/test_data. This observes an actual routed response; it never makes a new request itself.
-Use an independent completion signal. Unknown endpoints or POST/write operations are unsupported:
-ask for a supported test environment instead of fabricating a request or treating a blocked action as a bug.
+Use an independent completion signal. Writes are disabled unless the trusted environment.state_changes
+contains approval for that method and path in a test/staging environment with a reset adapter.
+Approved writes can only be triggered by normal UI actions; never generate direct HTTP requests or
+change scope/approval/reset settings. If approval is missing ask for a supported test environment.
+Unknown endpoints remain unsupported. Never treat a policy-blocked action as a bug.
 The expected/symptom predicates must operationalize the given expectation and are frozen before testing.
 For a static visual issue, navigation alone can be the entire test. Do not add clicks or fills just
 to make a longer plan: those actions may change the state being inspected. Use visible=true on the

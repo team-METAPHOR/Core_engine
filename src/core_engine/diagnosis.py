@@ -4,6 +4,11 @@ from .redaction import redact_text
 
 
 _REASONS = {
+    "NAVIGATION_TIMEOUT": ("environment_blocked", "페이지 로딩 제한 시간 안에 이동을 완료하지 못했습니다.", "테스트 서버와 정적 리소스 로딩 시간을 확인하고 페이지 이동 제한을 조정해주세요."),
+    "TRANSPORT_TIMEOUT": ("environment_blocked", "대상 서버의 연결 또는 응답 대기 시간이 초과됐습니다.", "서버 지연과 요청 제한 시간을 확인해주세요."),
+    "STATE_RESET_REQUIRED": ("environment_blocked", "승인된 상태 변경에 연결된 서버 초기화 어댑터가 없습니다.", "프로그램에 등록된 어댑터 ID와 일치하는 StateReset을 워커에서 전달해주세요."),
+    "STATE_CHANGE_OUT_OF_SCOPE": ("scope_restricted", "상태 변경 요청이 승인된 메서드·경로 범위를 벗어났습니다.", "관리자가 승인한 테스트 환경의 허용 목록을 확인해주세요."),
+    "STATE_CHANGE_REDIRECT_UNSUPPORTED": ("scope_restricted", "상태 변경 응답이 다른 주소로 이동을 요구해 후속 요청을 차단했습니다.", "테스트 API가 리다이렉트 없이 결과를 반환하도록 설정해주세요."),
     "CREDENTIALS_REQUIRE_HTTPS": ("environment_blocked", "테스트 계정이나 세션을 사용하는 대상은 HTTPS여야 합니다.", "프로그램 원점과 인증 대상 경로를 유효한 인증서가 있는 HTTPS 주소로 등록해주세요. 인증 없는 HTTP 검증은 가능합니다."),
     "LOGIN_FAILED": ("environment_blocked", "등록된 테스트 계정으로 로그인하거나 로그인 성공을 확인하지 못했습니다.", "테스트 계정·로그인 경로·폼 선택자·성공 확인 조건을 점검해주세요. 추가 인증이 필요한 화면은 현재 자동 로그인으로 처리하지 않습니다."),
     "STALE_COMPLETION_SIGNAL": ("execution_blocked", "이전 동작의 완료 표시만 남아 있고 마지막 동작 이후 새 처리 증거를 확인하지 못했습니다.", "마지막 입력 뒤 필요한 제출·검색 동작이 누락됐는지 확인하고, 마지막 동작의 완료 조건을 명확히 해주세요."),
@@ -15,7 +20,7 @@ _REASONS = {
     "NAVIGATION_FAILED": ("environment_blocked", "등록된 페이지로 정상 이동하지 못했습니다.", "접속 주소·인증·테스트 서버 상태를 확인해주세요."),
     "DISCOVERY_FAILED": ("environment_blocked", "계획 작성에 필요한 초기 화면을 관찰하지 못했습니다.", "대상 페이지의 접근과 로딩 상태를 확인해주세요."),
     "BROWSER_UNAVAILABLE": ("environment_blocked", "요청한 브라우저를 시작하지 못했습니다.", "해당 Playwright 브라우저와 운영체제 의존성을 설치해주세요."),
-    "METHOD_NOT_ALLOWED": ("scope_restricted", "현재 실행 범위에서 허용하지 않은 요청 방식이 필요했습니다.", "허용된 읽기 전용 테스트 환경을 준비하거나 해당 절차를 수동 검증해주세요."),
+    "METHOD_NOT_ALLOWED": ("scope_restricted", "현재 실행 범위에서 허용하지 않은 요청 방식이 필요했습니다.", "상태 변경이 필요하면 관리자가 테스트 환경의 메서드·경로와 서버 초기화 어댑터를 승인해야 합니다."),
     "STATE_CHANGING_PATH": ("scope_restricted", "현재 엔진이 제한하는 상태 변경 경로에 도달했습니다.", "상태 변경이 없는 테스트 경로를 준비하거나 별도 수동 검증해주세요."),
     "PAGE_SCRIPT_ERROR": ("environment_blocked", "페이지 스크립트 오류가 관찰되어 판정을 보류했습니다.", "정제된 페이지 오류와 동일 시점의 서버 로그를 확인해주세요."),
     "AUTHORIZATION_REVOKED": ("cancelled", "작업의 실행 권한이 철회됐습니다.", "유효한 실행 권한이 확인된 뒤 새 작업을 요청해주세요."),
@@ -66,6 +71,14 @@ def build_diagnosis(report):
         if codes and codes[0].startswith("MODEL_") and codes[0] not in _REASONS:
             category, summary = "model_unavailable", "AI 처리 또는 작업의 모델 사용 예산 문제로 중단됐습니다."
     actions = []
+    blocked = [item for e in evidence for item in e.get("blocked_requests", [])]
+    blocked += [r for s in report.get("observations", []) for r in s.get("network", [])
+                if r.get("non_fatal") and r.get("blocker") in {"ORIGIN_OUT_OF_SCOPE", "PATH_OUT_OF_SCOPE"}]
+    if blocked:
+        summary += " 범위 밖 하위 리소스가 차단된 상태의 관찰이므로 실제 화면과의 차이를 검토해야 합니다."
+        actions.append({"code": "REVIEW_BLOCKED_SUBRESOURCES", "owner": "developer",
+            "message": "차단한 SDK·외부 리소스 목록을 확인하고, 해당 리소스 누락이 관찰된 증상에 영향을 주는지 검토해주세요.",
+            "required_fields": []})
     if verdict == "not_reproduced":
         actions.append({"code": "COMPARE_REPORTED_CONDITIONS", "owner": "reporter",
             "message": "제보 당시 계정 역할·세션·브라우저·앱 버전·입력 데이터를 현재 테스트 조건과 비교해주세요.",

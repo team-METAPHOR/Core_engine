@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 import threading
@@ -46,12 +47,21 @@ def login_site():
 
         def do_GET(self):
             state['hits'].append(('GET', self.path))
+            if self.path == '/app/status':
+                self.send(401, '{}')
+                return
             if self.path == '/app/login':
-                self.send(200, '''<!doctype html><style>body {background:rgb(180,0,0)}</style>
+                page = '''<!doctype html><style>body {background:rgb(180,0,0)}</style>
 <h1>LOGIN SCREEN</h1><form action="/app/auth" method="post">
 <input name="username" autocomplete="username"><input name="password" type="password">
 <input type="hidden" name="csrf" value="fixture-csrf"><button type="submit">Sign in</button></form>
-<script>console.error('login phase must not be captured');</script>''',
+<script>console.error('login phase must not be captured');</script>'''
+                if state.get('probe'):
+                    page = '<!doctype html><script>fetch("/app/status").finally(() => setTimeout(() => {' \
+                        + 'document.body.innerHTML=' + json.dumps(page).replace('</script>', '<\\/script>') + ';}, 150));</script>'
+                if state.get('external_sdk'):
+                    page += '<script src="https://sdk.example.test/widget.js"></script>'
+                self.send(200, page,
                     [('Set-Cookie', 'csrf=fixture-csrf; Path=/app; HttpOnly')])
                 return
             cookie = self.headers.get('Cookie', '')

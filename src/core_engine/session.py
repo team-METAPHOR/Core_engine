@@ -7,7 +7,10 @@ import tempfile
 import time
 from urllib.parse import unquote, urlsplit
 
-from .policy import PolicyError
+from .policy import PolicyError, STATE_CHANGING_METHODS
+
+
+SOFT_SCOPE_ERRORS = frozenset({"ORIGIN_OUT_OF_SCOPE", "PATH_OUT_OF_SCOPE"})
 
 
 @asynccontextmanager
@@ -72,6 +75,8 @@ class GuardedPage:
         self.login_in_progress = False
         self.login_post_used = False
         self.login_redirect_url = None
+        self.blocked_requests = []
+        self.state_changing_requests = []
 
     def block(self, code):
         if not self.blocked:
@@ -181,18 +186,35 @@ class GuardedPage:
         from playwright.async_api import Error
 
         task = None
-        item = {"url": self.options.redact(route.request.url)[:2048], "method": route.request.method, "status": None, "blocker": None}
+        item = {"url": self.options.redact(route.request.url)[:2048], "method": route.request.method,
+                "resource_type": route.request.resource_type, "status": None, "blocker": None,
+                "send_attempted": False}
+        audit = None
         item["elapsed_seconds"] = round(time.monotonic() - self.started, 3)
         if not self.login_in_progress and len(self.network) < 120:
             self.network.append(item)
         try:
             self.check()
+            self.transport.policy.check_url(route.request.url,
+                "GET" if self.login_in_progress and route.request.method == "POST" else route.request.method)
             arguments = {}
-            if self.options.login:
-                if self.options.login.password in unquote(route.request.url):
+            changing = route.request.method in STATE_CHANGING_METHODS and not self.login_in_progress
+            if changing:
+                self.transport.policy.check_url(route.request.url, route.request.method)
+                if len(self.state_changing_requests) >= self.transport.budget.limits.max_total_requests:
+                    raise PolicyError("REQUEST_LIMIT")
+                audit = {"method": route.request.method, "path": urlsplit(item["url"]).path,
+                         "send_attempted": False, "status": None, "blocker": None}
+                self.state_changing_requests.append(audit)
+                arguments["request_body"] = route.request.post_data_buffer or b""
+            if self.options.login or self.transport.policy.state_changes:
+                if self.options.login and self.options.login.password in unquote(route.request.url):
                     raise PolicyError("LOGIN_FAILED")
                 raw = await route.request.all_headers()
                 names = {"cookie": "Cookie", "authorization": "Authorization"}
+                if changing:
+                    names.update({"content-type": "Content-Type", "x-csrftoken": "X-CSRFToken",
+                                  "x-csrf-token": "X-CSRF-Token", "origin": "Origin", "referer": "Referer"})
                 if self.login_in_progress and route.request.method == "POST":
                     if self.login_post_used:
                         raise PolicyError("LOGIN_FAILED")
@@ -204,6 +226,11 @@ class GuardedPage:
                         raise PolicyError("LOGIN_FAILED")
                     arguments["login_body"] = route.request.post_data_buffer or b""
                 arguments["browser_headers"] = {name: raw[key] for key, name in names.items() if key in raw}
+            def sent():
+                item["send_attempted"] = True
+                if audit is not None:
+                    audit["send_attempted"] = True
+            arguments["on_send"] = sent
             task = asyncio.create_task(asyncio.to_thread(self.transport.fetch, route.request.url, route.request.method, **arguments))
             self.workers.add(task)
             response = await asyncio.shield(task)
@@ -223,24 +250,47 @@ class GuardedPage:
                 return
             await route.fulfill(status=response.status, headers=response.headers, body=response.body)
             observed = (route.request.method, urlsplit(route.request.url).path, response.status) in self.observed_responses
-            if response.status >= 400 and not observed:
+            login_probe = (self.login_in_progress and self.options.login and response.status == 401
+                and route.request.method == "GET" and route.request.resource_type in {"fetch", "xhr"}
+                and urlsplit(route.request.url).path in self.options.login.unauthenticated_paths)
+            client_error = (not self.login_in_progress and route.request.resource_type != "document"
+                            and 400 <= response.status < 500)
+            if client_error:
+                item["non_fatal"] = True
+            if response.status >= 400 and not observed and not login_probe and not client_error:
                 self.block("LOGIN_FAILED" if self.login_in_progress else "HTTP_ERROR")
         except PolicyError as exc:
             item["blocker"] = exc.code
-            self.block(exc.code)
+            soft = (route.request.resource_type != "document"
+                    and exc.code in SOFT_SCOPE_ERRORS)
+            if soft:
+                item["non_fatal"] = True
+                if len(self.blocked_requests) < self.transport.budget.limits.max_total_requests:
+                    self.blocked_requests.append({k: item[k] for k in (
+                        "url", "method", "resource_type", "blocker", "send_attempted", "non_fatal")})
+                else:
+                    self.block("REQUEST_LIMIT")
+            else:
+                self.block(exc.code)
             await route.abort("blockedbyclient")
         except Error:
             item["blocker"] = "BROWSER_REQUEST_FAILED"
             self.block("BROWSER_REQUEST_FAILED")
         finally:
+            if audit is not None:
+                audit.update(status=item["status"], blocker=item["blocker"])
             if task is not None and task.done():
                 self.workers.discard(task)
 
     async def navigate(self, url):
         self.check()
         self.transport.policy.check_url(url)
-        timeout = self.options.login.timeout_ms if self.login_in_progress else self.timeout_ms
-        response = await self.page.goto(url, wait_until="load", timeout=timeout)
+        from playwright.async_api import TimeoutError as BrowserTimeout
+        timeout = self.options.login.timeout_ms if self.login_in_progress else self.options.navigation_timeout_ms
+        try:
+            response = await self.page.goto(url, wait_until="load", timeout=timeout)
+        except BrowserTimeout:
+            raise PolicyError("NAVIGATION_TIMEOUT") from None
         if response is None or response.status >= 400:
             raise PolicyError("NAVIGATION_FAILED")
         self.check()

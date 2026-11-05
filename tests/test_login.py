@@ -48,6 +48,19 @@ class LoginContractTests(unittest.TestCase):
 
 
 class LoginBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_anonymous_probe_and_delayed_login_form(self):
+        for allowed in (False, True):
+            with self.subTest(allowed=allowed), login_site() as (origin, state):
+                state.update(probe=True, external_sdk=True)
+                config = options()
+                if allowed:
+                    config = replace(config, login=replace(config.login, unauthenticated_paths=('/app/status',)))
+                result = await BrowserRunner(local_policy(origin), options=config).run(
+                    scenario(origin), reset=reset, is_authorized=lambda: True)
+                self.assertEqual(result.verdict.value, 'reproduced' if allowed else 'inconclusive', result)
+                self.assertEqual(state['logins'], 2 if allowed else 0)
+                self.assertFalse(any('widget.js' in path for _, path in state['hits']))
+
     async def test_discovery_and_both_attempts_use_fresh_login_without_recording_it(self):
         with login_site() as (origin, state), tempfile.TemporaryDirectory() as directory:
             config = options(record_video=True)

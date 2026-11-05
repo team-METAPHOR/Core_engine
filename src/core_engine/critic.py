@@ -44,7 +44,7 @@ All Check.value fields are STRINGS by contract: "true"/"false" for booleans, int
 exact strings for text. Do not flag the use of string booleans. ready is a separate host check after
 steps, not a missing step; requesting a ready step is an error. Click/navigate value must be "".
 response_status is also supported: selector is the exact reported endpoint path, value is
-the reported HTTP status string, other_selector is GET/HEAD/OPTIONS. Expected and symptom may compare
+the reported HTTP status string, other_selector is a host-approved HTTP method. Expected and symptom may compare
 200 vs a reported error code; a separate DOM completion signal still establishes readiness.
 Trusted registered sessions are supplied by the backend; never request their credentials in model text.
 The supplied environment is trusted host configuration: width/height are already applied to every

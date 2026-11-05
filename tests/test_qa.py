@@ -8,7 +8,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from core_engine import (BrowserOptions, JobStore, ModelError, QALimits, QARequest, QAService)
+from core_engine import (BrowserOptions, JobStore, ModelError, QALimits, QARequest, QAService, StateChangePolicy)
 from fixture_site import site
 from qa_fixtures import ScriptedModel, analysis, check, intake, plan, screenshot
 from test_transport import local_policy
@@ -265,6 +265,11 @@ class QATests(unittest.IsolatedAsyncioTestCase):
                 changed = QAService(model, local_policy(origin), self.store, options=options)
                 result = await changed.retest(first.job_id, reset=reset, is_authorized=lambda: True)
                 self.assertEqual(result.error_code, 'BASELINE_ENVIRONMENT_MISMATCH', result)
+            changed_policy = replace(local_policy(origin), state_changes=StateChangePolicy(
+                'test', 'cart-reset', (('POST', '/app/api/cart'),)))
+            changed = QAService(model, changed_policy, self.store, options=service.options)
+            result = await changed.retest(first.job_id, reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.error_code, 'BASELINE_ENVIRONMENT_MISMATCH', result)
             self.assertEqual(len(hits), before)
             self.assertEqual(len(model.calls), 3)
 

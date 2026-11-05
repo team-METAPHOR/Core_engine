@@ -17,6 +17,7 @@ from .checks import Check, observe_check, wait_for_check
 from .observation import BrowserOptions, Recorder
 from .plan import BrowserPlan, TextCheck
 from .policy import PolicyError, RunPolicy
+from .reset import validate_reset
 from .session import GuardedPage, launch_browser, browser_driver
 from .transport import GuardedTransport
 from .verdict import AttemptResult, Verdict, judge_attempts
@@ -37,6 +38,8 @@ class Evidence:
     elapsed_seconds: float = 0.0
     timeline: tuple[dict, ...] = ()
     completion_evidence: dict = field(default_factory=dict)
+    blocked_requests: tuple[dict, ...] = ()
+    state_changing_requests: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class BrowserRunner:
         try:
             async with asyncio.timeout(self.limits.max_runtime_seconds):
                 transport.check()
+                validate_reset(self.policy, reset)
                 self.recorder.progress(attempt=0, phase="attempt_started")
                 await self._reset(reset, 0)
                 transport.check()
@@ -139,6 +143,7 @@ class BrowserRunner:
         attempts, evidence = [], []
         try:
             transport.check()
+            validate_reset(self.policy, reset)
             async with asyncio.timeout(self.limits.max_runtime_seconds):
                 async with browser_driver() as pw:
                     browser = await launch_browser(pw, self.options)
@@ -301,5 +306,7 @@ class BrowserRunner:
         record = Evidence(uuid4().hex, ordinal, completed, ready, observed, blocker,
                           expected_observed=expected, observation_ids=tuple(snapshots), stage=stage,
                           elapsed_seconds=round(time.monotonic() - started, 3), timeline=tuple(timeline),
-                          completion_evidence=completion_evidence)
+                          completion_evidence=completion_evidence,
+                          blocked_requests=tuple(session.blocked_requests),
+                          state_changing_requests=tuple(session.state_changing_requests))
         return AttemptResult(blocker is None, observed, (record.id,), blocker), record
