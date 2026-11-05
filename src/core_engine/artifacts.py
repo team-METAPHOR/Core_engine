@@ -31,7 +31,7 @@ class JobStore:
         return job_id
 
     def _path(self, job_id, name):
-        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+\.(json|png|md)", name):
+        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_-]+\.(json|png|md|webm|spec\.ts)", name):
             raise ValueError("invalid artifact name")
         directory = self._directory(job_id)
         if not directory.is_dir():

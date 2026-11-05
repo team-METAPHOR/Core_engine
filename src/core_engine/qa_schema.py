@@ -18,6 +18,10 @@ INTAKE_SCHEMA = _object(
     expected_behavior=optional_text(), expectation_source=_enum("report", "image_inferred", "unknown"),
     symptom_description=_text(), reproduction_steps=_array(_text(800), 10),
     preconditions=_array(_text(800), 6), questions=_array(_text(800), 5),
+    required_actions=_array(_object(action=_enum("click", "fill", "navigate"),
+        value=optional_text(2000), source_quote=_text(800)), 18),
+    actions_complete={"type": "boolean"},
+    completion_signal={"anyOf": [_object(value=_text(300), source_quote=_text(800)), {"type": "null"}]},
 )
 
 CHECK_SCHEMA = {"anyOf": [
@@ -26,6 +30,7 @@ CHECK_SCHEMA = {"anyOf": [
             value=_enum("true", "false"), other_selector=_enum("")),
     _object(kind=_enum("overlap"), selector=_text(256), value=_enum("true", "false"), other_selector=_text(256)),
     _object(kind=_enum("count"), selector=_text(256), value=_text(4), other_selector=_enum("")),
+    _object(kind=_enum("response_status"), selector=_text(256), value=_text(3), other_selector=_enum("GET", "HEAD", "OPTIONS")),
 ]}
 ACTION_SCHEMA = {"anyOf": [
     _object(action=_enum("navigate", "click"), target=_text(2048), value=_enum("")),
@@ -115,9 +120,26 @@ For data-dependent behavior, the exact input and expected outcome must be suppor
 test_data. A vague claim that some unknown query/account/item should work is insufficient: ask for
 the missing input and its known expected outcome before testing. Never replace missing facts with
 plausible example data. Preserve supplied literal values, including spelling and punctuation.
+Extract required_actions from the original report, in order, with exact source_quote substrings from
+the supplied report fields. Use fill.value only for a literal included in that quote; click/navigate
+value is empty. Omit the host-provided initial page navigation. Include a later navigate/reload only
+when explicitly reported. Do not invent implicit clicks: a report saying 'search A then B' does not
+necessarily specify how submission happens. Set actions_complete=true only when the exact full UI
+action sequence is explicit, or a static observation needs no interaction; otherwise false. Preserve
+explicit repeat counts. A one-click report requires one click, not two. These requirements constrain
+later plans and critiques, so incomplete descriptions must not be marked complete.
+When the report explicitly names a POST-action completion indicator, extract completion_signal with
+its exact value and the exact containing source_quote. Otherwise use null. This must be a completion
+indicator independent of normal/buggy outcomes, not the expected result, an input, or initial text.
+Never derive a completion signal or action quote from the screenshot, guesses, or another model.
+The host opens the registered entry page before reported actions. Do not include this initial page
+opening in required_actions; include navigate only for an explicitly reported LATER navigation.
 """
 PLAN_PROMPT = DATA_RULES + """
 Build one bounded, deterministic browser test from the interpreted report and current page snapshot.
+scenario_contract contains grounded report requirements. Preserve its completion signal and ordered
+actions. When actions_complete is true, do not add or drop interactions. A critique cannot override
+these quoted requirements. Do not append navigation after interactions to satisfy a final-action rule.
 Images are ordered as indicated by image_order: the current page is the initial state, and the reporter
 screenshot (when supplied) shows the reported symptom. Use DOM boundaries to distinguish adjacent text;
 do not concatenate text from different elements into one selector's expected value.
@@ -155,6 +177,11 @@ expected is clipped=false and symptom is clipped=true; for UNWANTED overlap, exp
 and symptom is overlap=true. A control that should be enabled has expected enabled=true and symptom
 enabled=false. For a banner that should disappear, expected visible=false and symptom visible=true.
 Keep normal and defective meanings fixed even if the current page already looks corrected.
+For a specifically reported HTTP response, response_status uses selector=exact same-origin path,
+other_selector=GET/HEAD/OPTIONS, value=three-digit status. Both path and status must be explicitly in
+the report/test_data. This observes an actual routed response; it never makes a new request itself.
+Use an independent completion signal. Unknown endpoints or POST/write operations are unsupported:
+ask for a supported test environment instead of fabricating a request or treating a blocked action as a bug.
 The expected/symptom predicates must operationalize the given expectation and are frozen before testing.
 For a static visual issue, navigation alone can be the entire test. Do not add clicks or fills just
 to make a longer plan: those actions may change the state being inspected. Use visible=true on the

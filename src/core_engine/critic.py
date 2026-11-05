@@ -43,6 +43,11 @@ measures BOTH expected and symptom, twice in fresh sessions. These predicates AR
 All Check.value fields are STRINGS by contract: "true"/"false" for booleans, integer strings for count,
 exact strings for text. Do not flag the use of string booleans. ready is a separate host check after
 steps, not a missing step; requesting a ready step is an error. Click/navigate value must be "".
+response_status is also supported: selector is the exact reported endpoint path, value is
+the reported HTTP status string, other_selector is GET/HEAD/OPTIONS. Expected and symptom may compare
+200 vs a reported error code; a separate DOM completion signal still establishes readiness.
+Trusted registered sessions are supplied by the backend; never request their credentials in model text.
+Review the existing checks rather than requesting extra assertions.
 Never request an extra assert_text/wait_for_text/click to verify the final result. wait_for_text is not
 an allowed action. A last click or fill followed by ready/expected/symptom is a complete test.
 For a static issue, navigate alone is valid; readiness can be visibility of the affected content.

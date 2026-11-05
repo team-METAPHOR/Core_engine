@@ -23,6 +23,7 @@ class FixtureModel:
                 "expectation_source": "unknown" if missing else "report",
                 "symptom_description": self.case.description or "기대 동작 정보가 필요함",
                 "reproduction_steps": [], "preconditions": [],
+                "required_actions": [], "actions_complete": False, "completion_signal": None,
                 "questions": ["기대 동작과 사용한 검색어를 알려주세요."] if missing else []}
         elif "plan" in fields:
             value = {"status": "ready", "questions": [], "rationale": "고정 응답으로 실행기 검증",

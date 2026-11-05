@@ -14,6 +14,8 @@ from .qa import QALimits, QARequest, QAResult, QAService
 from .plan import BrowserPlan, Step, TextCheck
 from .policy import PolicyError, ResolvedTarget, RunPolicy, canonical_url
 from .verdict import AttemptResult, Verdict, judge_attempts
+from .test_export import export_playwright_test
+from .conditions import ConditionLimits, ConditionsResult, ConditionsService, TestCondition
 
 __all__ = [
     "BrowserOptions",
@@ -52,4 +54,9 @@ __all__ = [
     "Verdict",
     "canonical_url",
     "judge_attempts",
+    "export_playwright_test",
+    "ConditionLimits",
+    "ConditionsResult",
+    "ConditionsService",
+    "TestCondition",
 ]

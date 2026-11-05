@@ -3,8 +3,9 @@
 import asyncio
 from dataclasses import dataclass
 import time
+from urllib.parse import urlsplit
 
-from .policy import PolicyError
+from .policy import PolicyError, canonical_url
 
 
 @dataclass(frozen=True)
@@ -15,7 +16,7 @@ class Check:
     other_selector: str = ""
 
     def __post_init__(self):
-        if self.kind not in {"text", "visible", "enabled", "count", "overlap", "clipped"}:
+        if self.kind not in {"text", "visible", "enabled", "count", "overlap", "clipped", "response_status"}:
             raise ValueError("unsupported UI check")
         if not isinstance(self.selector, str) or not 1 <= len(self.selector) <= 256:
             raise ValueError("invalid check selector")
@@ -27,15 +28,26 @@ class Check:
             raise ValueError("count must be 0..1000")
         if not isinstance(self.other_selector, str) or len(self.other_selector) > 256:
             raise ValueError("invalid secondary selector")
-        if (self.kind == "overlap") != bool(self.other_selector):
+        if self.kind == "response_status":
+            if self.other_selector not in {"GET", "HEAD", "OPTIONS"} or not self.value.isascii() or not self.value.isdigit() or not 100 <= int(self.value) <= 599:
+                raise ValueError("response check needs an allowed method and HTTP status")
+            if not self.selector.startswith("/") or "?" in self.selector or canonical_url("https://scope.invalid" + self.selector) != "https://scope.invalid" + self.selector:
+                raise ValueError("response check requires an exact canonical path")
+        elif (self.kind == "overlap") != bool(self.other_selector):
             raise ValueError("only overlap requires a secondary selector")
 
 
-async def observe_check(page, check) -> bool:
+async def observe_check(page, check, network=None) -> bool:
     """Missing/ambiguous elements are blocked except explicit visibility/count checks."""
     if not isinstance(check, Check):
         # Legacy TextCheck keeps its visible-element semantics.
         check = Check("text", check.selector, check.text)
+    if check.kind == "response_status":
+        matching = [item for item in (network or []) if item["method"] == check.other_selector
+                    and urlsplit(item["url"]).path == check.selector]
+        if not matching or matching[-1].get("status") is None or matching[-1].get("blocker"):
+            raise PolicyError("RESPONSE_NOT_OBSERVED")
+        return matching[-1]["status"] == int(check.value)
     locator = page.locator("css=" + check.selector)
     count = await locator.count()
     if check.kind == "count":
@@ -70,15 +82,15 @@ async def observe_check(page, check) -> bool:
     return actual == (check.value == "true")
 
 
-async def wait_for_check(page, check, timeout_ms, guard):
+async def wait_for_check(page, check, timeout_ms, guard, network=None):
     deadline = time.monotonic() + timeout_ms / 1000
     while True:
         guard()
         try:
-            if await observe_check(page, check):
+            if await observe_check(page, check, network):
                 return
         except PolicyError as exc:
-            if exc.code not in {"CHECK_TARGET_UNAVAILABLE"}:
+            if exc.code not in {"CHECK_TARGET_UNAVAILABLE", "RESPONSE_NOT_OBSERVED"}:
                 raise
         if time.monotonic() >= deadline:
             raise PolicyError("STEP_OR_READINESS_FAILED")

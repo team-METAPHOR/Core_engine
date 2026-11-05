@@ -77,6 +77,9 @@ def validate_output(value, schema: dict) -> None:
                 raise ValueError("expected nonempty text")
             if not schema["minLength"] <= len(value) <= schema["maxLength"]:
                 raise ValueError("incorrect text length")
+    elif kind == "boolean":
+        if type(value) is not bool:
+            raise ValueError("expected boolean")
     elif kind == "null":
         if value is not None:
             raise ValueError("expected null")

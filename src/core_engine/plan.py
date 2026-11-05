@@ -64,3 +64,6 @@ class BrowserPlan:
         for step in self.steps:
             if step.action == "navigate":
                 policy.check_url(step.target)
+        for check in (self.ready, self.expected, self.symptom):
+            if isinstance(check, Check) and check.kind == "response_status":
+                policy.check_url(policy.base_url.rstrip("/") + check.selector, check.other_selector)

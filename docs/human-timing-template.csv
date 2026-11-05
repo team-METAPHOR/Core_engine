@@ -1,0 +1,2 @@
+pair_id,case_id,participant_id,order,manual_active_seconds,assisted_active_seconds,manual_wall_seconds,assisted_wall_seconds,manual_quality_pass,assisted_quality_pass,hourly_cost_usd,assisted_api_cost_usd,notes
+,,,,,,,,,,,,

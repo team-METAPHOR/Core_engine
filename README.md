@@ -39,9 +39,12 @@ AI는 제보·화면을 해석하고 계획·보고서를 생성합니다. 엔�
 | 재현 계획 | 요소·화면·위치와 크기를 읽고 최대 20개 동작 생성, 실행 전 계약 오류 피드백 및 제한된 재작성 |
 | 비판자 | 선택적 Groq 모델로 누락된 조작·잘못된 완료 조건 등을 1회 검토, 원문 근거로 제한된 수정 |
 | 실행·재계획 | 두 독립 실행, 단계별 관찰, 실패한 동작의 선택자만 최대 2회 보정 |
-| 검증 조건 | 텍스트, 표시 여부, 활성화, 요소 개수, 영역 겹침, 화면/요소 넘침 |
+| 검증 조건 | 텍스트, 표시 여부, 활성화, 요소 개수, 영역 겹침, 화면/요소 넘침, 제보에 명시된 HTTP 응답 코드 |
 | 근거 | 화면, 정제된 요소 정보, 요청 URL·상태·차단 코드, 콘솔/페이지 오류, 단계·시각·계획 해시 |
 | 보고 | 재현 결과, 임시 영향도, 원인 가설, 해결 방향, 검증 절차, 근거 참조 |
+| 실패 진단 | 막힌 단계·관찰 사실·추가 정보·담당별 다음 조치, AI 설명 생성 실패 시에도 보존 |
+| 영상·테스트 | 선택적 마스킹 WebM 영상, 정상 동작을 검증하는 다운로드용 Playwright 테스트 |
+| 조건 비교 | 등록된 역할·세션·Chromium/Firefox/WebKit·화면 크기·응답 지연 조건, 각 2회 독립 실행 |
 | 저장·연동 | 작업별 JSON/PNG/Markdown, 진행 이벤트, 추가 정보 응답·동일 계획 재검증 API |
 | 실행 통제 | 원점·경로·DNS/IP 검사, 요청 수·용량·시간 제한, 취소·승인 철회, 모델 호출 수 제한 |
 
@@ -54,8 +57,10 @@ Python 3.11 이상을 사용합니다. macOS/Linux 기준:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ".[browser]"
+python -m pip install ".[browser,video]"
 python -m playwright install chromium --only-shell
+# 조건 비교에서 사용할 브라우저 추가
+python -m playwright install firefox webkit
 ```
 
 Linux에 브라우저 시스템 라이브러리가 없으면 `python -m playwright install --with-deps chromium --only-shell`을 사용합니다. 소스를 수정한 뒤에는 패키지를 다시 설치합니다. 소스 기준 테스트는 `PYTHONPATH=src`를 붙여 실행할 수도 있습니다.
@@ -65,6 +70,7 @@ Linux에 브라우저 시스템 라이브러리가 없으면 `python -m playwrig
 ```bash
 python examples/qa_demo.py
 python examples/qa_demo.py --repair --retest-fixed
+python examples/qa_demo.py --video --retest-fixed
 ```
 
 실제 Chromium으로 합성 검색 화면의 스크린샷을 만든 뒤, **명시적인 고정 모델 응답**으로 제보 해석·계획 생성·브라우저 실행·보고서를 연결합니다. 고정 응답은 실제 AI 추론이나 모델 품질 평가가 아닙니다. 외부 AI API를 호출하지 않습니다.
@@ -162,6 +168,10 @@ result = await service.run(request, reset=reset_test_state, is_authorized=check_
 
 ## 판정 규칙
 
+실패 이유·영상·다운로드 테스트·조건 비교의 백엔드/프론트 연결은 [새 기능 연동 명세](docs/qa-evidence-and-conditions.md)에 정리했습니다. 영상에는 정상 동작하는 `ffmpeg`의 VP9 인코더가 필요하며 `FFMPEG_BINARY`로 경로를 지정할 수 있습니다. 기본 초당 4회 마스킹 화면을 촬영한 영상으로, 원본 모든 프레임 녹화는 아닙니다.
+
+발표의 연구 근거·성과 지표·사람 시간 측정 절차는 [발표 검증 문서](docs/presentation-validation.md)를 참고하세요. 사람이 같은 작업을 수행한 기록은 아직 없어 절감률은 미측정이며 [빈 측정 양식](docs/human-timing-template.csv)을 제공합니다.
+
 | 판정 | 조건 |
 |---|---|
 | `reproduced` | 두 시도 모두 완료되어 증상 조건 참, 기대 조건 거짓 |
@@ -185,6 +195,8 @@ result = await service.run(request, reset=reset_test_state, is_authorized=check_
 ## 테스트
 
 ```bash
+# 생성된 TypeScript 테스트 실제 실행 검증에 필요
+npm ci --prefix tests/js
 PYTHONPATH=src python -W error::ResourceWarning -m unittest discover -s tests -v
 ```
 
