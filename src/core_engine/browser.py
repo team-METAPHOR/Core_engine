@@ -40,6 +40,7 @@ class Evidence:
     completion_evidence: dict = field(default_factory=dict)
     blocked_requests: tuple[dict, ...] = ()
     state_changing_requests: tuple[dict, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,28 @@ class BrowserRun:
     attempts: tuple[AttemptResult, AttemptResult]
     verdict: Verdict
     evidence: tuple[Evidence, ...]
+
+
+async def _perform(session, step, timeout_ms):
+    from playwright.async_api import expect
+
+    if step.action == "navigate":
+        await session.navigate(step.target)
+    elif step.action in {"reload", "back"}:
+        await session.history_action(step.action)
+    else:
+        locator = session.page.locator("css=" + step.target)
+        if step.action == "click":
+            await locator.click()
+        elif step.action == "fill":
+            # Credentials must come from trusted session setup, never model text.
+            if await locator.get_attribute("type") in {"password", "hidden"}:
+                raise PolicyError("SENSITIVE_INPUT_UNSUPPORTED")
+            await locator.fill(step.value)
+        else:
+            await expect(locator).to_have_text(step.value, timeout=timeout_ms, use_inner_text=True)
+    session.check()
+    session.transport.policy.check_url(session.page.url)
 
 
 def plan_digest(plan):
@@ -77,8 +100,11 @@ class BrowserRunner:
                                 login_url=(self.policy.base_url.rstrip('/') + (self.options.login.submit_path or self.options.login.login_path))
                                 if self.options.login else None)
 
-    async def inspect(self, url: str, *, reset, is_authorized, cancelled=None, budget=None) -> dict:
-        """Fresh read-only observation for planning; reset(0) is the discovery pass."""
+    async def inspect(self, url: str, *, reset, is_authorized, cancelled=None, budget=None, steps=()) -> dict | None:
+        """Fresh observation for planning; reset(0) is the discovery pass.
+
+        With `steps` (an already validated, scope-checked replay), they run after the entry navigation
+        and the page after the last one is returned; None when a step cannot be completed."""
         from playwright.async_api import Error, async_playwright
 
         if self.recorder is None:
@@ -107,7 +133,12 @@ class BrowserRunner:
                                 except (PolicyError, Error):
                                     pass
                                 raise
-                            result = await session.capture(0, 0, "discovery")
+                            for step in steps:
+                                try:
+                                    await _perform(session, step, self.options.step_timeout_ms)
+                                except (PolicyError, Error, AssertionError):
+                                    return None
+                            result = await session.capture(0, len(steps), "replayed" if steps else "discovery")
                             session.check()
                             return result
                     finally:
@@ -175,7 +206,7 @@ class BrowserRunner:
         from playwright.async_api import Error, expect
 
         completed, ready, observed, expected, blocker = 0, False, None, None, None
-        snapshots = []
+        snapshots, warnings = [], []
         completion_evidence, before_outcomes, completion_tracker = {}, None, None
         started, stage, timeline = time.monotonic(), "environment", []
         responses = [(check.other_selector, check.selector, int(check.value))
@@ -231,23 +262,7 @@ class BrowserRunner:
                                         await observe_check(session.page, plan.symptom, session.network))
                                 except PolicyError:
                                     before_outcomes = None
-                        if step.action == "navigate":
-                            await session.navigate(step.target)
-                        elif step.action in {"reload", "back"}:
-                            await session.history_action(step.action)
-                        else:
-                            locator = session.page.locator("css=" + step.target)
-                            if step.action == "click":
-                                await locator.click()
-                            elif step.action == "fill":
-                                # Credentials must come from trusted session setup, never model text.
-                                if await locator.get_attribute("type") in {"password", "hidden"}:
-                                    raise PolicyError("SENSITIVE_INPUT_UNSUPPORTED")
-                                await locator.fill(step.value)
-                            else:
-                                await expect(locator).to_have_text(step.value, timeout=plan.step_timeout_ms, use_inner_text=True)
-                        session.check()
-                        session.transport.policy.check_url(session.page.url)
+                        await _perform(session, step, plan.step_timeout_ms)
                         completed += 1
                         if self.recorder:
                             self.recorder.progress(attempt=ordinal, phase="action_completed", step_index=index,
@@ -256,16 +271,28 @@ class BrowserRunner:
                         if snapshot:
                             snapshots.append(snapshot["id"])
                     mark("readiness")
-                    await wait_for_check(session.page, plan.ready, plan.step_timeout_ms, session.check, session.network)
-                    ready = True
+                    try:
+                        await wait_for_check(session.page, plan.ready, plan.step_timeout_ms, session.check, session.network)
+                        ready = True
+                    except PolicyError as exc:
+                        if exc.code != "STEP_OR_READINESS_FAILED" or plan.expected is None:
+                            raise
+                        # Every step completed: an unobserved completion signal alone does not block
+                        # when the two outcome predicates are observable and exactly one holds.
+                        warnings.append("READY_NOT_OBSERVED")
                     mark("outcome")
-                    if isinstance(plan.symptom, TextCheck):
-                        await session.page.locator("css=" + plan.symptom.selector).wait_for(state="visible")
-                    observed = await observe_check(session.page, plan.symptom, session.network)
-                    if plan.expected is not None:
-                        expected = await observe_check(session.page, plan.expected, session.network)
-                        if observed == expected:
-                            raise PolicyError("ORACLE_AMBIGUOUS")
+                    try:
+                        if isinstance(plan.symptom, TextCheck):
+                            await session.page.locator("css=" + plan.symptom.selector).wait_for(state="visible")
+                        observed = await observe_check(session.page, plan.symptom, session.network)
+                        if plan.expected is not None:
+                            expected = await observe_check(session.page, plan.expected, session.network)
+                            if observed == expected:
+                                raise PolicyError("ORACLE_AMBIGUOUS")
+                    except (PolicyError, Error) as exc:
+                        if not ready:
+                            raise PolicyError("STEP_OR_READINESS_FAILED") from None
+                        raise exc
                     session.check()
                     if completion_evidence:
                         new_requests = len(session.network) > completion_evidence["requests_before_final_action"]
@@ -313,5 +340,6 @@ class BrowserRunner:
                           elapsed_seconds=round(time.monotonic() - started, 3), timeline=tuple(timeline),
                           completion_evidence=completion_evidence,
                           blocked_requests=tuple(session.blocked_requests),
-                          state_changing_requests=tuple(session.state_changing_requests))
+                          state_changing_requests=tuple(session.state_changing_requests),
+                          warnings=tuple(warnings))
         return AttemptResult(blocker is None, observed, (record.id,), blocker), record
