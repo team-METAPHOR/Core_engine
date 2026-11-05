@@ -30,6 +30,7 @@ from .reporting import render_report
 from .scenario_contract import ground_contract, planning_schema, confirm_contract, planner_contract
 from .diagnosis import build_diagnosis
 from .test_export import export_playwright_test, required_test_environment
+from .live import LiveStream
 
 
 @dataclass(frozen=True)
@@ -170,7 +171,18 @@ class QAService:
 
     async def run(self, request: QARequest, *, reset: Callable[[int], Awaitable[bool]],
                   is_authorized: Callable[[], bool], cancelled: threading.Event | None = None,
+                  live: LiveStream | None = None,
                   _baseline=None, _parent=None, _job_created=None) -> QAResult:
+        if live is not None and (not isinstance(live, LiveStream) or live.job_id is not None or live.closed):
+            raise ValueError("supply a new LiveStream for each QA run")
+        try:
+            return await self._run(request, reset=reset, is_authorized=is_authorized, cancelled=cancelled,
+                                   live=live, _baseline=_baseline, _parent=_parent, _job_created=_job_created)
+        finally:
+            if live:
+                live._end("interrupted", error_code="LIVE_RUN_INTERRUPTED")
+
+    async def _run(self, request, *, reset, is_authorized, cancelled, live, _baseline, _parent, _job_created):
         if not isinstance(request, QARequest) or request.program_id != self.policy.program_id:
             raise ValueError("request must belong to this program")
         self.policy.check_url(request.entry_url)
@@ -192,15 +204,21 @@ class QAService:
         # Authorization also covers external model processing, not just browser requests.
         guard()
         job_id = self.store.create()
+        if live:
+            live._bind(job_id, request.program_id, request.report_id)
         if _job_created:
             _job_created(job_id)
-        recorder = Recorder(self.store, job_id, self.options)
+        recorder = Recorder(self.store, job_id, self.options, live=live)
+        def event(kind, detail=None):
+            self.store.event(job_id, kind, detail)
+            if live:
+                live._status(kind, detail)
         calls = _ModelCalls(self.model, self.limits, guard, self.options.redact)
         image_ref = self.store.image(job_id, request.screenshot) if request.screenshot else None
         self.store.write_json(job_id, "request.json", {"report_id": request.report_id,
             "program_id": request.program_id, "entry_url": request.entry_url,
             **clean_tree(request.text(), self.options.redact), "screenshot": image_ref})
-        self.store.event(job_id, "received", {"parent_job_id": _parent, "baseline_job_id": _baseline})
+        event("received", {"parent_job_id": _parent, "baseline_job_id": _baseline})
         intake, plan, run, analysis, repairs = None, None, None, None, []
         contract = None
         plan_validation = []
@@ -256,7 +274,9 @@ class QAService:
                               tuple(self.options.redact(q) for q in questions), error)
             self.store.write_json(job_id, "result.json", asdict(result))
             self.store.write(job_id, "report.md", render_report(report).encode("utf-8"))
-            self.store.event(job_id, status, {"error_code": error})
+            event(status, {"error_code": error})
+            if live:
+                live._end(status, error_code=error)
             return result
 
         try:
@@ -283,9 +303,9 @@ class QAService:
                         raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
                     if baseline_report["environment"].get("response_delay_ms", 0) != self.options.response_delay_ms:
                         raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
-                    self.store.event(job_id, "retesting", {"baseline_job_id": _baseline})
+                    event("retesting", {"baseline_job_id": _baseline})
                 else:
-                    self.store.event(job_id, "interpreting")
+                    event("interpreting")
                     intake = await calls.invoke("intake", INTAKE_PROMPT,
                         {"report": request.text(), "has_screenshot": request.screenshot is not None,
                          "environment": self.options.public()},
@@ -303,10 +323,10 @@ class QAService:
                 runner = BrowserRunner(self.policy, self.browser_limits, options=self.options, recorder=recorder,
                     expected_browser_version=baseline_report["environment"].get("browser_version") if baseline_report else None)
                 if plan is None:
-                    self.store.event(job_id, "discovering")
+                    event("discovering")
                     snapshot = await runner.inspect(request.entry_url, reset=reset, is_authorized=is_authorized,
                                                     cancelled=cancelled, budget=budget)
-                    self.store.event(job_id, "planning")
+                    event("planning")
                     images = (recorder.image(snapshot),)
                     image_order = ["current_page"]
                     if request.screenshot is not None:
@@ -337,13 +357,13 @@ class QAService:
                             except PlanValidationError as exc:
                                 diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field}
                                 plan_validation.append(diagnostic)
-                                self.store.event(job_id, "plan_rejected", diagnostic)
+                                event("plan_rejected", diagnostic)
                                 feedback = {**diagnostic, "message": exc.feedback}
                         revise = False
                         if proposal == 0 and self.reviewer is not None:
                             plan_review["status"] = "reviewing"
                             plan_review["reviewed_plan_sha256"] = plan_digest(candidate) if candidate else None
-                            self.store.event(job_id, "reviewing_plan")
+                            event("reviewing_plan")
                             self.store.write_json(job_id, "review_proposal.json", {
                                 "proposal": generated, "validation_feedback": feedback})
                             try:
@@ -363,7 +383,7 @@ class QAService:
                             effective_review, ignored = supported_revision(review)
                             plan_review["ignored_issues"] = ignored
                             plan_review["status"] = review["decision"]
-                            self.store.event(job_id, "plan_reviewed", {"decision": review["decision"]})
+                            event("plan_reviewed", {"decision": review["decision"]})
                             if review["decision"] == "needs_info":
                                 return finish("needs_info", questions=review["questions"])
                             revise = effective_review["decision"] == "revise"
@@ -394,7 +414,7 @@ class QAService:
                         "program_id": request.program_id, "scope_revision": self.policy.scope_revision,
                         "plan": encode_plan(plan), "step_timeout_ms": plan.step_timeout_ms,
                         "plan_sha256": plan_digest(plan), "intake": intake})
-                    self.store.event(job_id, "running", {"revision": revision, "plan_sha256": plan_digest(plan)})
+                    event("running", {"revision": revision, "plan_sha256": plan_digest(plan)})
                     run = await runner.run(plan, reset=reset, is_authorized=is_authorized, cancelled=cancelled, budget=budget)
                     self.store.write_json(job_id, f"run_{revision}.json", asdict(run))
                     guard()
@@ -416,7 +436,7 @@ class QAService:
                                   if step.action != "fill" or item["tag"] in {"input", "textarea"}]
                     if not candidates:
                         break
-                    self.store.event(job_id, "replanning", {"step": index, "revision": revision})
+                    event("replanning", {"step": index, "revision": revision})
                     repaired = await calls.invoke("repair", REPAIR_PROMPT,
                         {"intake": intake, "frozen_plan": encode_plan(plan), "failed_step_index": index,
                          "page": snapshot}, repair_schema(candidates), (recorder.image(snapshot),))
@@ -431,7 +451,7 @@ class QAService:
                     repairs.append({"step": index, "reason": repaired["reason"], "from_plan": old_digest,
                                     "to_plan": plan_digest(plan), "observation_id": snapshot["id"]})
                 guard()
-                self.store.event(job_id, "reporting")
+                event("reporting")
                 refs = {"report"} | {"evidence:" + ev.id for ev in run.evidence}
                 try:
                     analysis = await calls.invoke("report", ANALYSIS_PROMPT,
@@ -469,17 +489,17 @@ class QAService:
             if step.value and redact_text(step.value) != step.value:
                 raise ValueError("sensitive generated action value")
 
-    async def retest(self, job_id: str, *, reset, is_authorized, cancelled=None):
+    async def retest(self, job_id: str, *, reset, is_authorized, cancelled=None, live=None):
         request = self._load_request(job_id)
-        return await self.run(request, reset=reset, is_authorized=is_authorized, cancelled=cancelled, _baseline=job_id)
+        return await self.run(request, reset=reset, is_authorized=is_authorized, cancelled=cancelled, live=live, _baseline=job_id)
 
-    async def resume(self, job_id: str, answers: str, *, reset, is_authorized, cancelled=None):
+    async def resume(self, job_id: str, answers: str, *, reset, is_authorized, cancelled=None, live=None):
         previous = self.store.read_json(job_id, "result.json")
         if previous["status"] != "needs_info" or not isinstance(answers, str) or not answers.strip():
             raise ValueError("resume requires a needs_info job and answers")
         request = self._load_request(job_id)
         request = replace(request, description=request.description + "\n추가 답변:\n" + answers)
-        return await self.run(request, reset=reset, is_authorized=is_authorized, cancelled=cancelled, _parent=job_id)
+        return await self.run(request, reset=reset, is_authorized=is_authorized, cancelled=cancelled, live=live, _parent=job_id)
 
     def _load_request(self, job_id):
         data = self.store.read_json(job_id, "request.json")
