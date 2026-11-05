@@ -36,6 +36,7 @@ class Evidence:
     stage: str = "environment"
     elapsed_seconds: float = 0.0
     timeline: tuple[dict, ...] = ()
+    completion_evidence: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,7 @@ class BrowserRunner:
 
         completed, ready, observed, expected, blocker = 0, False, None, None, None
         snapshots = []
+        completion_evidence, before_outcomes, completion_tracker = {}, None, None
         started, stage, timeline = time.monotonic(), "environment", []
         responses = [(check.other_selector, check.selector, int(check.value))
                      for check in (plan.expected, plan.symptom) if isinstance(check, Check)
@@ -186,6 +188,29 @@ class BrowserRunner:
                         snapshot = await session.capture(ordinal, index, "before")
                         if snapshot:
                             snapshots.append(snapshot["id"])
+                        if index == len(plan.steps) - 1 and step.action != "navigate" and getattr(plan.ready, "kind", "text") == "text":
+                            try:
+                                already_ready = await observe_check(session.page, plan.ready, session.network)
+                            except PolicyError:
+                                already_ready = False
+                            completion_evidence = {"ready_before_final_action": already_ready,
+                                                   "requests_before_final_action": len(session.network)}
+                            if already_ready:
+                                # A local handler can refresh the same completion text without
+                                # making a request or changing a defective result. Observe the
+                                # signal itself so that this still counts as fresh processing.
+                                completion_tracker = await session.page.locator("css=" + plan.ready.selector).evaluate_handle("""node => {
+                                    const state = {mutations: 0};
+                                    state.observer = new MutationObserver(records => state.mutations += records.length);
+                                    state.observer.observe(node, {childList: true, characterData: true, subtree: true});
+                                    return state;
+                                }""")
+                                try:
+                                    before_outcomes = (
+                                        await observe_check(session.page, plan.expected, session.network) if plan.expected else None,
+                                        await observe_check(session.page, plan.symptom, session.network))
+                                except PolicyError:
+                                    before_outcomes = None
                         if step.action == "navigate":
                             await session.navigate(step.target)
                         else:
@@ -216,6 +241,21 @@ class BrowserRunner:
                         if observed == expected:
                             raise PolicyError("ORACLE_AMBIGUOUS")
                     session.check()
+                    if completion_evidence:
+                        new_requests = len(session.network) > completion_evidence["requests_before_final_action"]
+                        changed = before_outcomes != (expected, observed) if before_outcomes is not None else None
+                        refreshed = None
+                        if completion_tracker is not None and not new_requests:
+                            refreshed = await completion_tracker.evaluate("""state => {
+                                state.mutations += state.observer.takeRecords().length;
+                                state.observer.disconnect();
+                                return state.mutations > 0;
+                            }""")
+                        completion_evidence.update(new_requests_after_final_action=new_requests,
+                                                   outcomes_changed_after_final_action=changed,
+                                                   completion_signal_refreshed=refreshed)
+                        if completion_evidence["ready_before_final_action"] and not new_requests and not refreshed and changed is False:
+                            raise PolicyError("STALE_COMPLETION_SIGNAL")
                     mark("completed")
                 except PolicyError as exc:
                     blocker = exc.code
@@ -241,5 +281,6 @@ class BrowserRunner:
             observed = expected = None
         record = Evidence(uuid4().hex, ordinal, completed, ready, observed, blocker,
                           expected_observed=expected, observation_ids=tuple(snapshots), stage=stage,
-                          elapsed_seconds=round(time.monotonic() - started, 3), timeline=tuple(timeline))
+                          elapsed_seconds=round(time.monotonic() - started, 3), timeline=tuple(timeline),
+                          completion_evidence=completion_evidence)
         return AttemptResult(blocker is None, observed, (record.id,), blocker), record

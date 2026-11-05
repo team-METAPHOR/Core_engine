@@ -4,6 +4,7 @@ from .redaction import redact_text
 
 
 _REASONS = {
+    "STALE_COMPLETION_SIGNAL": ("execution_blocked", "이전 동작의 완료 표시만 남아 있고 마지막 동작 이후 새 처리 증거를 확인하지 못했습니다.", "마지막 입력 뒤 필요한 제출·검색 동작이 누락됐는지 확인하고, 마지막 동작의 완료 조건을 명확히 해주세요."),
     "STEP_OR_READINESS_FAILED": ("execution_blocked", "조작 대상 또는 처리 완료 조건을 확인하지 못했습니다.", "재현 순서·선택자·완료 문구를 확인해주세요."),
     "CHECK_TARGET_UNAVAILABLE": ("execution_blocked", "결과를 확인할 화면 요소가 없거나 표시되지 않았습니다.", "권한과 화면 상태가 제보 당시 조건과 같은지 확인해주세요."),
     "AMBIGUOUS_CHECK_TARGET": ("execution_blocked", "검사 대상이 여러 개여서 결과를 하나로 결정하지 못했습니다.", "검사할 요소를 구분할 안정적인 선택자가 필요합니다."),
@@ -70,6 +71,12 @@ def build_diagnosis(report):
     for code in codes:
         message = _REASONS.get(code, (None, None, "오류 코드와 실행 증거를 확인한 뒤 필요한 환경 또는 입력을 보완해주세요."))[2]
         actions.append({"code": code, "owner": "operator", "message": message, "required_fields": []})
+        if code == "MODEL_RATE_LIMITED":
+            delays = [call["retry_after_seconds"] for call in report.get("model_calls", [])
+                      if call.get("status") == code and type(call.get("retry_after_seconds")) in (int, float)
+                      and 0 <= call["retry_after_seconds"] <= 86400]
+            if delays:
+                actions[-1]["retry_after_seconds"] = max(delays)
     if verdict != "reproduced" and statuses & {401, 403}:
         actions.append({"code": "CHECK_TEST_ACCOUNT", "owner": "backend",
             "message": "401/403 응답이 관찰됐습니다. 제보한 역할의 테스트 계정과 접근 권한을 확인해주세요. 계정 문제로 원인이 확정된 것은 아닙니다.",

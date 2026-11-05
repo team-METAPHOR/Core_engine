@@ -27,7 +27,7 @@ from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PRO
                         PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, repair_schema)
 from .redaction import redact_text
 from .reporting import render_report
-from .scenario_contract import ground_contract, planning_schema, confirm_contract
+from .scenario_contract import ground_contract, planning_schema, confirm_contract, planner_contract
 from .diagnosis import build_diagnosis
 from .test_export import export_playwright_test, required_test_environment
 
@@ -138,6 +138,8 @@ class _ModelCalls:
             return clean_tree(data)
         except (ModelError, PolicyError) as exc:
             record["status"] = exc.code
+            if isinstance(exc, ModelError) and exc.retry_after_seconds is not None:
+                record["retry_after_seconds"] = exc.retry_after_seconds
             raise
         except asyncio.CancelledError:
             record["status"] = "interrupted"
@@ -302,8 +304,10 @@ class QAService:
                     if request.screenshot is not None:
                         images += (request.screenshot,)
                         image_order.append("reporter_screenshot")
-                    context = {"entry_url": redact_text(request.entry_url), "intake": intake, "report": request.text(),
-                               "page": snapshot, "image_order": image_order, "scenario_contract": contract,
+                    context = {"entry_url": redact_text(request.entry_url),
+                               "intake": {k: v for k, v in intake.items() if k not in {"required_actions", "actions_complete", "completion_signal"}},
+                               "report": request.text(),
+                               "page": snapshot, "image_order": image_order, "scenario_contract": planner_contract(contract),
                                "environment": {**self.options.public(), "browser_version": recorder.browser_version}}
                     proposal_schema = planning_schema(PLAN_SCHEMA, contract)
                     for proposal in range(self.limits.max_plan_revisions + 1):
@@ -320,7 +324,7 @@ class QAService:
                                     entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract)
                                 self._validate_plan(candidate)
                                 contract = confirm_contract(candidate, contract)
-                                context = {**context, "scenario_contract": contract}
+                                context = {**context, "scenario_contract": planner_contract(contract)}
                                 proposal_schema = planning_schema(PLAN_SCHEMA, contract)
                             except PlanValidationError as exc:
                                 diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field}

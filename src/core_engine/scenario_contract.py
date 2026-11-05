@@ -44,6 +44,13 @@ def confirm_contract(plan, contract):
             "completeness_basis": "intake_and_page_plan_agree" if complete else "partial_reported_sequence"}
 
 
+def planner_contract(contract):
+    # Raw intake labels (including mistaken observations/completeness) are audit data,
+    # not a second, contradictory instruction to the page-based planner.
+    return {key: copy.deepcopy(contract[key]) for key in
+            ("required_actions", "actions_complete", "completion_signal")}
+
+
 def planning_schema(schema, contract):
     """Constrain provider output using quoted report facts, never evaluator answers."""
     if not contract or not (contract["completion_signal"] or contract["required_actions"] or contract["actions_complete"]):

@@ -152,6 +152,10 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(contract['actions_complete'])
             self.assertEqual(contract['completeness_basis'], 'partial_reported_sequence')
             self.assertEqual(len(primary.calls), 3)
+            self.assertNotIn('actions_complete', primary.calls[1]['context']['intake'])
+            self.assertNotIn('required_actions', primary.calls[1]['context']['intake'])
+            self.assertNotIn('reported_actions_complete', primary.calls[1]['context']['scenario_contract'])
+            self.assertNotIn('reported_observations', primary.calls[1]['context']['scenario_contract'])
 
     async def test_second_host_revision_fixes_duplicate_within_shared_six_calls(self):
         with site() as (origin, _, _):
@@ -214,9 +218,11 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_critic_failure_is_explicit_and_stops_reproduction(self):
         with site() as (origin, _, _):
             primary = ScriptedModel([intake(), plan(origin + '/app/mixed')])
-            critic = ScriptedModel([ModelError('MODEL_RATE_LIMITED')])
+            critic = ScriptedModel([ModelError('MODEL_RATE_LIMITED', retry_after_seconds=45)])
             result = await self.service(primary, origin, critic).run(self.request(origin), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.error_code, 'MODEL_RATE_LIMITED', result)
+            self.assertEqual(result.report['model_calls'][-1]['retry_after_seconds'], 45)
+            self.assertEqual(result.report['diagnosis']['next_actions'][0]['retry_after_seconds'], 45)
             self.assertEqual(result.report['plan_review']['status'], 'failed')
             self.assertIsNone(result.report['run'])
             self.assertEqual(len(critic.calls), 1)

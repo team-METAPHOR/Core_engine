@@ -17,6 +17,7 @@
 | `diagnosis.hypotheses` | AI 원인 가설. 관찰 사실과 별도 표시 |
 | `diagnosis.root_cause_confirmed` | 현재 항상 `false`. 블랙박스 QA만으로 코드 원인을 확정하지 않음 |
 | `run.evidence[].timeline` | 동작·완료 대기·결과 관찰의 상대 시간 |
+| `run.evidence[].completion_evidence` | 마지막 동작 전 완료 표시 존재 여부와 이후 요청·결과·완료 표시 갱신 관찰 |
 | `environment.browser_name`, `browser_version` | 실제 실행 엔진과 관찰한 버전. 브라우저가 시작하지 못하면 버전은 `null` |
 | `timings` | 작업 전체와 모델 호출 소요 시간. 인건비 절감률 아님 |
 | `scenario_contract.required_actions` | 원문 인용으로 고정한 필수 동작과 입력값 |
@@ -26,6 +27,10 @@
 | `scenario_contract.actions_complete`, `completeness_basis` | 초기 해석과 화면 기반의 유효한 계획이 순서·횟수까지 일치할 때만 전체 순서를 고정. 그 외에는 인용한 필수 동작의 순서를 보존하는 부분 시나리오 |
 
 접수 단계의 잘못된 “완전한 순서” 판정이 검색 제출이나 필터 클릭을 막지 않도록 페이지 기반 계획과 대조한 후 확정합니다. 두 단계의 일치가 실제 제보의 완전성을 보장하는 것은 아닙니다. 동일한 조작을 연속 반복하려면 제보에서 추출한 반복 동작이 필요하며, `setup_steps` 마지막과 `final_action`에 같은 트리거를 중복해 넣으면 실행 전에 거절합니다.
+
+마지막 동작 전에 이미 완료 문구가 보이고 이후 새 요청·결과 변화·완료 표시 갱신이 모두 없으면 `STALE_COMPLETION_SIGNAL`로 판정을 보류합니다. 입력만 바꾸고 제출하지 않은 계획이 이전 결과를 재현 증거로 사용하는 오류를 막습니다. 이는 동작과 결과의 인과관계 전체를 증명하는 기능은 아닙니다. 처리 시에도 완료 표시를 갱신하지 않는 화면에서는 더 구체적인 완료 조건이 필요할 수 있습니다.
+
+Groq 429의 유효한 `Retry-After` 초 값은 `model_calls[].retry_after_seconds`와 `diagnosis.next_actions[].retry_after_seconds`로 전달합니다. 엔진은 자동 재시도하지 않으며 비판자 실패를 무시하지 않습니다. 백엔드가 공급자 단위 대기·유한한 재시도를 담당해야 합니다. 이 값이 없는 경우 대기 시간을 추측하지 않습니다. [Groq 공식 문서](https://console.groq.com/docs/rate-limits)에 따르면 제한은 조직 단위이므로 같은 조직의 키 교체로 한도가 늘어나지는 않습니다.
 
 비판 모델의 근거 없는 동작 삭제를 제외한 내역은 `plan_review.ignored_issues`에 남깁니다. `accepted_ignoring_unanchored_review`는 초기 계획을 유지했다는 뜻이며, 두 모델이 동의했다는 표시가 아닙니다. 상세 상태는 [비판 모델 연동 명세](critic-review-proposal.md)를 따릅니다.
 

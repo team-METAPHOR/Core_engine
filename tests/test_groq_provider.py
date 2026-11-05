@@ -69,6 +69,20 @@ class GroqProviderTests(unittest.TestCase):
                 self.generate()
             self.assertEqual(str(raised.exception), code)
 
+    def test_rate_limit_exposes_only_bounded_retry_seconds_without_retry(self):
+        self.response.status = 429
+        for header, expected in [('31.5', 31.5), ('86400', 86400), ('90000', None),
+                                 ('private-header', None), ('NaN', None), ('-1', None), (None, None)]:
+            with self.subTest(header=header):
+                self.connection.reset_mock()
+                self.response.getheader.return_value = header
+                with self.assertRaises(ModelError) as raised:
+                    self.generate()
+                self.assertEqual(str(raised.exception), 'MODEL_RATE_LIMITED')
+                self.assertEqual(raised.exception.retry_after_seconds, expected)
+                self.connection.request.assert_called_once()
+                self.response.read.assert_not_called()
+
     def test_refusal_truncation_tools_and_malformed_output(self):
         for changes, code in (({'finish_reason': 'length'}, 'MODEL_INCOMPLETE'),
                               ({'finish_reason': 'content_filter'}, 'MODEL_REFUSED'),

@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 import json
+import math
+import re
 from typing import Protocol
 
 from .images import Screenshot
@@ -17,9 +19,21 @@ class ModelError(Exception):
         "MODEL_INVALID_OUTPUT",
     })
 
-    def __init__(self, code: str):
+    def __init__(self, code: str, *, retry_after_seconds: float | None = None):
         self.code = code if code in self.CODES else "MODEL_UNAVAILABLE"
+        self.retry_after_seconds = retry_after_seconds if (
+            self.code == "MODEL_RATE_LIMITED" and type(retry_after_seconds) in (int, float)
+            and math.isfinite(retry_after_seconds) and 0 <= retry_after_seconds <= 86400
+        ) else None
         super().__init__(self.code)
+
+
+def retry_after_seconds(header):
+    """Keep only bounded delta seconds; never expose arbitrary provider header text."""
+    if not isinstance(header, str) or not re.fullmatch(r"[0-9]{1,7}(?:\.[0-9]{1,6})?", header.strip()):
+        return None
+    value = float(header.strip())
+    return value if value <= 86400 else None
 
 
 @dataclass(frozen=True)

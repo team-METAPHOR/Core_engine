@@ -3,6 +3,12 @@ from core_engine.diagnosis import build_diagnosis
 
 
 class DiagnosisTests(unittest.TestCase):
+    def test_rate_limit_keeps_provider_wait_hint_without_inventing_a_retry(self):
+        result = build_diagnosis({'status': 'failed', 'error_code': 'MODEL_RATE_LIMITED',
+            'model_calls': [{'status': 'MODEL_RATE_LIMITED', 'role': 'critic', 'retry_after_seconds': 32.5}]})
+        self.assertEqual(result['next_actions'][0]['retry_after_seconds'], 32.5)
+        self.assertEqual(result['category'], 'model_unavailable')
+
     def test_http_error_is_observation_not_asserted_root_cause(self):
         result = build_diagnosis({'status': 'inconclusive', 'error_code': 'HTTP_ERROR',
             'observations': [{'id': 'snapshot-1', 'network': [{'method': 'GET',
