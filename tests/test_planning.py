@@ -3,7 +3,9 @@ import unittest
 
 from core_engine.analysis_schema import validate_output
 from core_engine.planning import PlanValidationError, validate_candidate
-from core_engine.qa_schema import PLAN_DATA_SCHEMA, PLAN_SCHEMA, draft_plan, flatten_draft
+from core_engine.plan import Step
+from core_engine.qa_schema import (PLAN_DATA_SCHEMA, PLAN_SCHEMA, draft_plan, flatten_draft, repair_candidates,
+                                   repair_schema)
 from qa_fixtures import check, plan
 
 
@@ -97,6 +99,51 @@ class PlanContractTests(unittest.TestCase):
         data['final_action'] = {'action': 'click', 'target': '#search', 'value': 'invented value'}
         with self.assertRaises(ValueError):
             validate_output(generated, PLAN_SCHEMA)
+
+
+def element(selector, tag='div', text='', *, enabled=True, role='', input_type='', name=''):
+    return {'selector': selector, 'tag': tag, 'role': role, 'name': name, 'text': text, 'enabled': enabled,
+            'input_type': input_type, 'state_attributes': {}}
+
+
+class RepairCandidateTests(unittest.TestCase):
+    def test_click_keeps_only_interactive_elements_without_duplicates(self):
+        elements = [element('#title', 'h1', '장바구니'), element('#note', 'p', '쿠폰 적용 안내'),
+                    element('#price', 'span', '1,000원'), element('#row', 'li', '상품'),
+                    element('#apply', 'button', '쿠폰 적용'), element('#apply', 'button', '쿠폰 적용'),
+                    element('#home', 'a', '홈'), element('#submit', 'input', input_type='submit'),
+                    element('#agree', 'input', input_type='checkbox'), element('#menu', 'div', '메뉴', role='button'),
+                    element('#sort', 'select'), element('#more', 'summary', '더보기'), element('#lbl', 'label', '동의')]
+        result = repair_candidates(elements, Step('click', 'button:has-text("쿠폰 적용")'))
+        self.assertEqual(sorted(result), ['#agree', '#apply', '#home', '#lbl', '#menu', '#more', '#sort', '#submit'])
+        self.assertEqual(result[0], '#apply')
+
+    def test_fill_keeps_only_text_inputs(self):
+        elements = [element('#q', 'input', input_type='text'), element('#memo', 'textarea'),
+                    element('#go', 'button', 'Go'), element('#p', 'p', 'text')]
+        self.assertEqual(sorted(repair_candidates(elements, Step('fill', '#old', 'cat'))), ['#memo', '#q'])
+
+    def test_enabled_and_similar_text_rank_first(self):
+        elements = [element('#other', 'button', '쿠폰 적용'), element('#cancel', 'button', '취소'),
+                    element('#coupon', 'button', '쿠폰 적용하기'), element('#apply', 'button', '쿠폰 적용', enabled=False)]
+        result = repair_candidates(elements, Step('click', 'button:has-text("쿠폰 적용")'))
+        self.assertEqual(result[:2], ['#other', '#coupon'])
+        self.assertEqual(result[-1], '#apply')
+
+    def test_candidates_stay_under_provider_enum_limits(self):
+        elements = [element(f'#button-{index:04d}-' + 'x' * 80, 'button', f'버튼 {index}') for index in range(1500)]
+        elements.append(element('#' + 'y' * 300, 'button', '쿠폰 적용'))
+        result = repair_candidates(elements, Step('click', 'button:has-text("쿠폰 적용")'))
+        self.assertLessEqual(len(result), 200)
+        self.assertLessEqual(sum(map(len, result)), 12000)
+        self.assertTrue(all(len(selector) <= 200 for selector in result))
+        enum = repair_schema(result)['properties']['target']['enum']
+        self.assertLessEqual(len(enum), 201)
+
+    def test_no_relevant_element_returns_empty(self):
+        elements = [element('#title', 'h1', '장바구니'), element('#price', 'span', '1,000원')]
+        self.assertEqual(repair_candidates(elements, Step('click', '#gone')), [])
+        self.assertEqual(repair_candidates(elements, Step('fill', '#gone', 'x')), [])
 
 
 if __name__ == '__main__':

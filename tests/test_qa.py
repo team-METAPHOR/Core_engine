@@ -116,6 +116,11 @@ class QATests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(scenario[key], original['plan'][key])
             self.assertEqual(scenario['steps'][2]['target'], '#search')
             self.assertEqual(self.store.read_json(result.job_id, 'run_0.json')['verdict']['value'], 'inconclusive')
+            # A failed click offers only clickable elements, not the result/readiness text nodes.
+            offered = model.calls[2]['schema']['properties']['target']['enum']
+            self.assertIn('#search', offered)
+            self.assertNotIn('#result', offered)
+            self.assertNotIn('#ready', offered)
 
     async def test_model_cannot_repair_oracle_or_invent_selector(self):
         for repair in (
@@ -304,7 +309,7 @@ class QATests(unittest.IsolatedAsyncioTestCase):
         with site() as (origin, _, _):
             model = ScriptedModel([intake(), plan(origin + '/app/mixed', True),
                 {'status': 'repair', 'target': '#query', 'reason': 'candidate one', 'questions': []},
-                {'status': 'repair', 'target': '#ready', 'reason': 'candidate two', 'questions': []}, analysis()])
+                {'status': 'repair', 'target': '#help', 'reason': 'candidate two', 'questions': []}, analysis()])
             result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.status, 'inconclusive', result)
             self.assertEqual(len(result.report['repairs']), 2)

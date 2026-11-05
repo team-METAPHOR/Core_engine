@@ -1,5 +1,8 @@
 """Strict contracts for screenshot interpretation, test planning and locator repair."""
 
+from difflib import SequenceMatcher
+import re
+
 from .analysis_schema import _array, _enum, _object, _text
 from .checks import Check, STATE_ATTRIBUTES
 from .plan import BrowserPlan, Step
@@ -80,6 +83,65 @@ def flatten_draft(data, *, entry_url=None):
         steps.insert(0, {"action": "navigate", "target": entry_url, "value": ""})
     return {"steps": steps,
             **{key: data[key] for key in ("ready", "expected", "symptom")}}
+
+
+# Strict structured outputs cap enum size (OpenAI: 1,000 values per schema, 15,000 chars for an
+# enum over 250 values). Repair choices stay well below both so a busy page cannot cause HTTP 400.
+REPAIR_MAX_CANDIDATES = 200
+REPAIR_MAX_TOTAL_CHARS = 12000
+REPAIR_MAX_SELECTOR_CHARS = 200
+_CLICK_TAGS = frozenset({"button", "a", "select", "summary", "label", "option"})
+_CLICK_ROLES = frozenset({"button", "link", "checkbox", "radio", "switch", "tab", "menuitem", "menuitemcheckbox",
+                          "menuitemradio", "option", "combobox", "treeitem"})
+
+
+def _relevant(item, action):
+    if action == "fill":
+        return item.get("tag") in {"input", "textarea"}
+    if action == "click":
+        return (item.get("tag") in _CLICK_TAGS or item.get("role") in _CLICK_ROLES
+                or (item.get("tag") == "input" and item.get("input_type") != "hidden"))
+    return True
+
+
+def _normalize(value):
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _similarity(item, wanted):
+    if not wanted:
+        return 0.0
+    best = 0.0
+    for field in (item.get("text"), item.get("name"), item.get("selector")):
+        field = _normalize(field)
+        if not field:
+            continue
+        best = max(best, 1.0 if field == wanted else 0.9 if wanted in field else SequenceMatcher(None, wanted, field).ratio())
+    return best
+
+
+def repair_candidates(elements, step) -> list[str]:
+    """Selectors a repair may choose for the failed step: relevant, deduplicated, ranked and bounded."""
+    quoted = re.findall(r"""["']([^"']+)["']""", step.target or "")
+    wanted = _normalize(" ".join(quoted) if quoted else step.target)
+    ranked, seen = [], set()
+    for index, item in enumerate(elements):
+        selector = item.get("selector")
+        if (not isinstance(selector, str) or not selector or selector in seen
+                or len(selector) > REPAIR_MAX_SELECTOR_CHARS or not _relevant(item, step.action)):
+            continue
+        seen.add(selector)
+        disabled = item.get("enabled") is False or (item.get("state_attributes") or {}).get("aria-disabled") == "true"
+        ranked.append((disabled, -_similarity(item, wanted), index, selector))
+    selected, total = [], 0
+    for *_, selector in sorted(ranked):
+        if len(selected) == REPAIR_MAX_CANDIDATES:
+            break
+        if total + len(selector) > REPAIR_MAX_TOTAL_CHARS:
+            continue
+        selected.append(selector)
+        total += len(selector)
+    return selected
 
 
 def repair_schema(selectors):

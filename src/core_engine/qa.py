@@ -24,7 +24,8 @@ from .plan import Step
 from .planning import PlanValidationError, validate_candidate
 from .policy import PolicyError, RunPolicy, canonical_url
 from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PROMPT, PLAN_PROMPT,
-                        PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, repair_schema)
+                        PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, repair_candidates,
+                        repair_schema)
 from .redaction import redact_text
 from .reporting import render_report
 from .scenario_contract import ground_contract, planning_schema, confirm_contract, planner_contract
@@ -444,8 +445,7 @@ class QAService:
                                      and s["phase"] == "blocked"), None)
                     if snapshot is None:
                         break
-                    candidates = [item["selector"] for item in snapshot["elements"]
-                                  if step.action != "fill" or item["tag"] in {"input", "textarea"}]
+                    candidates = repair_candidates(snapshot["elements"], step)
                     if not candidates:
                         break
                     event("replanning", {"step": index, "revision": revision})

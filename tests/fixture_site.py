@@ -55,7 +55,7 @@ def site(*, tls=False):
                     attack = "new WebSocket('ws://' + location.host + '/app/ws');"
                 fixed = self.path == "/app/fixed" or (self.path == "/app/mixed" and state["fixed"])
                 payload = ("""<!doctype html><meta charset="utf-8">
-<input id="query"><button id="search">Search</button>
+<input id="query"><button id="search">Search</button><button id="help" type="button">Help</button>
 <div id="result">empty</div><div id="ready">ready</div><div id="fresh"></div>
 <script>
 document.querySelector('#fresh').textContent = localStorage.getItem('ran') ? 'no' : 'yes';
