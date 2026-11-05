@@ -75,8 +75,15 @@ class RequestBudget:
                     self.recent.popleft()
                 if self.total >= self.limits.max_total_requests:
                     raise PolicyError("REQUEST_LIMIT")
+                deadline = self.started + self.limits.max_runtime_seconds
                 if len(self.recent) >= self.limits.max_requests_per_minute:
-                    raise PolicyError("RATE_LIMIT")
+                    # A full per-minute window is a pacing delay, not a failure, when the oldest
+                    # request leaves the window before the runtime ends. Total stays a hard limit.
+                    release = self.recent[0] + 60
+                    if not wait or release >= deadline:
+                        raise PolicyError("RATE_LIMIT")
+                    self.available.wait(timeout=min(0.05, release - now))
+                    continue
                 if self.active < self.limits.max_concurrent_requests:
                     self.total += 1
                     self.active += 1
@@ -84,7 +91,7 @@ class RequestBudget:
                     break
                 if not wait:
                     raise PolicyError("CONCURRENCY_LIMIT")
-                self.available.wait(timeout=min(0.05, self.limits.max_runtime_seconds - (now - self.started)))
+                self.available.wait(timeout=min(0.05, deadline - now))
         try:
             yield
         finally:

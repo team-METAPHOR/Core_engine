@@ -121,8 +121,22 @@ class ReplayStepsTests(unittest.TestCase):
         self.assertEqual([(s['action'], s['target']) for s in steps],
                          [('navigate', self.origin + '/app'), *(('click', target) for target in RECORDED)])
 
+    def test_truncated_activity_replays_from_the_earliest_recorded_page(self):
+        # Truncation only drops older history; what remains is still the reporter's latest sequence.
+        steps = replay_steps(activity(truncated='true'), self.origin + '/app/cart', self.policy)
+        self.assertEqual([(s['action'], s['target']) for s in steps],
+                         [('navigate', self.origin + '/app'), *(('click', target) for target in RECORDED)])
+        tail = '\n'.join(activity(truncated='true').splitlines()[:2] + activity().splitlines()[5:])
+        steps = replay_steps(tail, self.origin + '/app/cart', self.policy)
+        self.assertEqual([(s['action'], s['target']) for s in steps],
+                         [('navigate', self.origin + '/app/products/1'), *(('click', target) for target in RECORDED[1:])])
+
+    def test_truncated_activity_starting_out_of_scope_is_not_replayed(self):
+        lines = activity(truncated='true').splitlines()
+        outside = '\n'.join(lines[:2] + ['9500ms ago navigation /outside'] + lines[2:])
+        self.assertEqual(replay_steps(outside, self.origin + '/app/cart', self.policy), ())
+
     def test_unsafe_or_incomplete_recordings_are_not_replayed(self):
-        self.assertEqual(replay_steps(activity(truncated='true'), self.origin + '/app/cart', self.policy), ())
         narrow = RunPolicy('demo', 1, 'https://shop.test', ('/app/cart',))
         self.assertEqual(replay_steps(activity(), self.origin + '/app/cart', narrow), ())
         self.assertEqual(replay_steps('', self.origin + '/app/cart', self.policy), ())

@@ -59,6 +59,38 @@ class BudgetTests(unittest.TestCase):
             pass
 
 
+    def test_queued_request_waits_for_rate_window_within_runtime(self):
+        now = [0.0]
+        def clock():
+            now[0] += 5.0  # time advances while the queued request waits
+            return now[0]
+        budget = RequestBudget(BudgetLimits(max_requests_per_minute=1, max_runtime_seconds=120), clock=clock)
+        with budget.request(wait=True):
+            pass
+        with budget.request(wait=True):
+            pass
+        self.assertEqual(budget.total, 2)
+        self.assertGreaterEqual(now[0], 60.0)
+
+    def test_rate_wait_that_cannot_finish_within_runtime_is_a_rate_limit(self):
+        now = [30.0]
+        budget = RequestBudget(BudgetLimits(max_requests_per_minute=1, max_runtime_seconds=60), clock=lambda: now[0])
+        with budget.request(wait=True):
+            pass
+        with self.assertRaises(PolicyError) as error:
+            with budget.request(wait=True):
+                pass
+        self.assertEqual(error.exception.code, "RATE_LIMIT")
+
+    def test_waiting_never_relaxes_total_limit(self):
+        budget = RequestBudget(BudgetLimits(max_total_requests=1))
+        with budget.request(wait=True):
+            pass
+        with self.assertRaises(PolicyError) as error:
+            with budget.request(wait=True):
+                pass
+        self.assertEqual(error.exception.code, "REQUEST_LIMIT")
+
 class VerdictTests(unittest.TestCase):
     def test_two_clean_observations_are_required(self):
         seen = AttemptResult(True, True, ("a",))

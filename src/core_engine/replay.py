@@ -11,10 +11,11 @@ MAX_REPLAY_STEPS = 18  # leaves the host entry navigation and one spare step wit
 
 
 def recorded_events(activity):
-    """Parse complete (not truncated) activity into ordered events, or () when replay is unsafe."""
+    """Parse activity into ordered events, or () when replay is unsafe.
+
+    Truncated activity (truncated=true) only lost older history: the remaining events are still the
+    reporter's latest sequence, so replay starts from the earliest recorded page (scope-checked later)."""
     lines = [line.strip() for line in (activity or "").splitlines() if line.strip()]
-    if not lines or "truncated=false" not in lines[0] + " " + (lines[1] if len(lines) > 1 else ""):
-        return ()
     events = []
     for line in lines:
         match = _EVENT.match(line)
