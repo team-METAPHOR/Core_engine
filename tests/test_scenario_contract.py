@@ -85,6 +85,31 @@ class ScenarioContractTests(unittest.TestCase):
         with self.assertRaises(PlanValidationError):
             self.validate(data)
 
+    def test_reload_and_back_require_reported_order_and_survive_schema_grounding(self):
+        for action, quote in [('reload', '이어서 새로고침'), ('back', '이어서 뒤로 가기')]:
+            self.report['description'] += ' ' + quote
+            self.intake['required_actions'].append({'action': action, 'value': '', 'source_quote': quote})
+            self.contract = ground_contract(self.intake, self.report)
+            data = plan(self.url)['plan']
+            data['steps'].extend({'action': item['action'], 'target': '', 'value': ''}
+                                for item in self.intake['required_actions'] if item['action'] in {'reload', 'back'})
+            candidate = self.validate(data)
+            self.contract = confirm_contract(candidate, self.contract)
+            validate_output({'status': 'ready', 'questions': [], 'rationale': 'test', 'plan': draft_plan(data)},
+                            planning_schema(PLAN_SCHEMA, self.contract))
+            data['steps'][-1] = {'action': 'navigate', 'target': self.url, 'value': ''}
+            with self.assertRaises(PlanValidationError):
+                self.validate(data)
+
+    def test_unreported_history_actions_are_rejected_even_with_partial_report(self):
+        self.contract = ground_contract(intake(), self.report)
+        for action in ('reload', 'back'):
+            data = plan(self.url)['plan']
+            data['steps'].append({'action': action, 'target': '', 'value': ''})
+            with self.assertRaises(PlanValidationError) as caught:
+                self.validate(data)
+            self.assertEqual(caught.exception.code, 'PLAN_UNSUPPORTED_NAVIGATION')
+
     def test_observing_a_result_never_adds_a_second_click(self):
         self.intake['required_actions'].append({'action': 'observe', 'value': '', 'source_quote': 'done 표시 후 확인'})
         self.contract = ground_contract(self.intake, self.report)

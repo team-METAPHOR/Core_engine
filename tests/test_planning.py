@@ -54,6 +54,30 @@ class PlanContractTests(unittest.TestCase):
             self.validate(self.data)
         self.assertEqual(error.exception.code, 'PLAN_FINAL_ASSERTION')
 
+    def test_whole_page_exact_text_is_rejected_before_browser_execution(self):
+        for key in ('ready', 'expected', 'symptom'):
+            data = copy.deepcopy(self.data)
+            data[key] = check('body', 'short status')
+            with self.assertRaises(PlanValidationError) as error:
+                self.validate(data)
+            self.assertEqual(error.exception.code, 'PLAN_OVERBROAD_TEXT_TARGET')
+        data = copy.deepcopy(self.data)
+        data['steps'].insert(1, {'action': 'assert_text', 'target': 'body', 'value': 'short status'})
+        with self.assertRaises(PlanValidationError) as error:
+            self.validate(data)
+        self.assertEqual(error.exception.code, 'PLAN_OVERBROAD_TEXT_TARGET')
+
+    def test_new_actions_and_checks_round_trip_in_model_schema(self):
+        from core_engine.qa_schema import encode_plan
+        for action in ('reload', 'back'):
+            data = copy.deepcopy(self.data)
+            data['steps'][-1] = {'action': action, 'target': '', 'value': ''}
+            data['expected'] = check('#choice', 'true', 'attribute', 'aria-pressed')
+            data['symptom'] = check('#choice', 'false', 'attribute', 'aria-pressed')
+            data['ready'] = check('', '/products', 'url_path')
+            validate_output({'status': 'ready', 'questions': [], 'rationale': 'test', 'plan': draft_plan(data)}, PLAN_SCHEMA)
+            self.assertEqual(encode_plan(self.validate(data)), data)
+
     def test_generated_draft_separates_setup_from_the_final_trigger(self):
         data = draft_plan(self.data)
         generated = {'status': 'ready', 'questions': [], 'rationale': 'test', 'plan': data}

@@ -21,15 +21,17 @@ class TextCheck:
 
 @dataclass(frozen=True)
 class Step:
-    action: Literal["navigate", "click", "fill", "assert_text"]
+    action: Literal["navigate", "reload", "back", "click", "fill", "assert_text"]
     target: str
     value: str | None = None
 
     def __post_init__(self) -> None:
-        if self.action not in {"navigate", "click", "fill", "assert_text"}:
+        if self.action not in {"navigate", "reload", "back", "click", "fill", "assert_text"}:
             raise ValueError("unsupported action")
         maximum = 2048 if self.action == "navigate" else 256
-        if not isinstance(self.target, str) or not 1 <= len(self.target) <= maximum:
+        minimum = 0 if self.action in {"reload", "back"} else 1
+        maximum = 0 if minimum == 0 else maximum
+        if not isinstance(self.target, str) or not minimum <= len(self.target) <= maximum:
             raise ValueError("invalid action target")
         if self.action in {"fill", "assert_text"}:
             if not isinstance(self.value, str) or len(self.value) > 2000:
@@ -67,3 +69,5 @@ class BrowserPlan:
         for check in (self.ready, self.expected, self.symptom):
             if isinstance(check, Check) and check.kind == "response_status":
                 policy.check_url(policy.base_url.rstrip("/") + check.selector, check.other_selector)
+            if isinstance(check, Check) and check.kind == "url_path":
+                policy.check_url(policy.base_url.rstrip("/") + check.value)

@@ -38,6 +38,9 @@ merely because the initial DOM shows a different string. If the report names the
 use it; replacing it with the page's initial status is wrong.
 Do not infer missing requirements, future server responses, or bugs from a blank area alone.
 ready must be independent of expected/symptom. Intermediate assert_text can wait between actions.
+reload/back are supported real browser operations with empty target/value and require quoted report
+actions. url_path checks exact pathname; attribute checks allowlisted ARIA state (other_selector).
+These are supported checks, not arbitrary JavaScript. Missing ARIA attributes are inconclusive.
 Execution is already provided by the host: it performs steps, waits for ready, then automatically
 measures BOTH expected and symptom, twice in fresh sessions. These predicates ARE the final assertions.
 All Check.value fields are STRINGS by contract: "true"/"false" for booleans, integer strings for count,

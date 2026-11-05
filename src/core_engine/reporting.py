@@ -17,6 +17,10 @@ def describe_check(check):
         return f'{target}에 해당하는 요소 {value}개'
     if check['kind'] == 'response_status':
         return f"{check['other_selector']} {target} 응답 코드: {value}"
+    if check['kind'] == 'url_path':
+        return f'현재 URL 경로: {value} (쿼리·프래그먼트 제외)'
+    if check['kind'] == 'attribute':
+        return f"{target}의 {check['other_selector']}: {value}"
     phrases = {'visible': ('표시됨', '표시되지 않음'), 'enabled': ('활성화됨', '비활성화됨'),
                'clipped': ('영역을 넘치거나 내용이 잘림', '영역 안에 표시됨'),
                'overlap': ('영역이 겹침', '영역이 겹치지 않음')}
@@ -76,7 +80,7 @@ def render_report(report: dict) -> str:
     if report.get('scenario'):
         lines += ['', '## 재현 순서', '']
         for i, step in enumerate(report['scenario']['steps'], 1):
-            action = {'navigate': '페이지 이동', 'fill': '입력', 'click': '클릭', 'assert_text': '텍스트 확인'}[step['action']]
+            action = {'navigate': '페이지 이동', 'reload': '새로고침', 'back': '뒤로 가기', 'fill': '입력', 'click': '클릭', 'assert_text': '텍스트 확인'}[step['action']]
             lines.append(f'{i}. ' + escape(f"{action} · {step['target']}" + (f" · {step['value']}" if step['value'] else '')))
         for label, key in [('완료 확인', 'ready'), ('기대 결과', 'expected'), ('증상 확인', 'symptom')]:
             lines += ['', f'**{label}:** ' + escape(describe_check(report['scenario'][key]))]

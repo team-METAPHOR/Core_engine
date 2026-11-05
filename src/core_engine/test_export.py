@@ -70,6 +70,7 @@ _RUNTIME = r'''
 test.use({ browserName: scenario.browser as 'chromium' | 'firefox' | 'webkit', trace: 'off', video: 'off', screenshot: 'off' });
 
 async function observe(page: Page, check: any, responses: any[]): Promise<boolean> {
+  if (check.kind === 'url_path') return new URL(page.url()).pathname === check.value;
   if (check.kind === 'response_status') {
     const found = responses.filter(r => r.method === check.other_selector && r.path === check.selector);
     if (!found.length) throw new Error('RESPONSE_NOT_OBSERVED');
@@ -84,6 +85,13 @@ async function observe(page: Page, check: any, responses: any[]): Promise<boolea
   }
   if (count !== 1 || !await element.isVisible()) throw new Error('CHECK_TARGET_UNAVAILABLE');
   if (check.kind === 'text') return (await element.innerText()).trim() === check.value.trim();
+  if (check.kind === 'attribute') {
+    const value = await element.getAttribute(check.other_selector);
+    const values = ['aria-pressed', 'aria-checked'].includes(check.other_selector)
+      ? ['true', 'false', 'mixed'] : ['true', 'false'];
+    if (!values.includes(value || '')) throw new Error('CHECK_ATTRIBUTE_UNAVAILABLE');
+    return value === check.value;
+  }
   let actual: boolean;
   if (check.kind === 'enabled') actual = await element.isEnabled();
   else if (check.kind === 'overlap') {
@@ -296,6 +304,20 @@ test(testName, async ({ browser }) => {
           const target = variable ? process.env[variable]! : index === 0 ? entry.href : new URL(original.pathname + original.search, entry.origin).href;
           if (!allowed(target, 'GET')) throw new Error('NAVIGATION_OUT_OF_SCOPE');
           await page.goto(target, { waitUntil: 'load' });
+        } else if (step.action === 'reload' || step.action === 'back') {
+          if (!allowed(page.url(), 'GET')) throw new Error('NAVIGATION_OUT_OF_SCOPE');
+          let navigated = false;
+          const listener = (frame: any) => { if (frame === page.mainFrame()) navigated = true; };
+          page.on('framenavigated', listener);
+          try {
+            const response = step.action === 'reload'
+              ? await page.reload({ waitUntil: 'load', timeout: scenario.navigationTimeout })
+              : await page.goBack({ waitUntil: 'load', timeout: scenario.navigationTimeout });
+            guard();
+            if (step.action === 'back' && page.url() === 'about:blank') throw new Error('HISTORY_UNAVAILABLE');
+            if (!response && !navigated) throw new Error(step.action === 'back' ? 'HISTORY_UNAVAILABLE' : 'NAVIGATION_FAILED');
+            if (response && response.status() >= 400) throw new Error('NAVIGATION_FAILED');
+          } finally { page.off('framenavigated', listener); }
         } else {
           const target = page.locator('css=' + step.target);
           if (step.action === 'click') await target.click();
@@ -305,6 +327,7 @@ test(testName, async ({ browser }) => {
           } else await expect(target).toHaveText(step.value, { useInnerText: true, timeout: scenario.timeout });
         }
         guard();
+        if (!allowed(page.url(), 'GET')) throw new Error('NAVIGATION_OUT_OF_SCOPE');
       }
       await expect.poll(async () => { guard(); try { return await observe(page, scenario.ready, responses); } catch { return false; } },
         { timeout: scenario.timeout }).toBe(true);

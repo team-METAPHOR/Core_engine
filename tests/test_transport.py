@@ -1,4 +1,6 @@
 import socket
+import ssl
+import http.client
 import threading
 import unittest
 from unittest.mock import patch
@@ -13,6 +15,22 @@ def local_policy(origin):
 
 
 class TransportTests(unittest.TestCase):
+    def test_transport_failures_keep_stable_cause_without_raw_exception(self):
+        failures = [(ssl.SSLCertVerificationError('secret-cert'), 'TLS_CERTIFICATE_ERROR'),
+            (ssl.SSLError('secret-tls'), 'TLS_HANDSHAKE_ERROR'),
+            (ConnectionRefusedError('secret-refused'), 'CONNECTION_REFUSED'),
+            (ConnectionResetError('secret-reset'), 'CONNECTION_RESET'),
+            (http.client.RemoteDisconnected('secret-disconnected'), 'CONNECTION_RESET'),
+            (OSError('secret-other'), 'TRANSPORT_ERROR')]
+        with site() as (origin, _, _):
+            for error, code in failures:
+                transport = GuardedTransport(local_policy(origin), RequestBudget(BudgetLimits()), lambda: True, threading.Event())
+                with patch('core_engine.transport.socket.create_connection', side_effect=error), self.assertRaises(PolicyError) as caught:
+                    transport.fetch(origin + '/app/bug')
+                self.assertEqual(caught.exception.code, code)
+                self.assertNotIn('secret', str(caught.exception))
+                transport.close()
+
     def test_numeric_connection_preserves_host_and_rechecks_dns(self):
         with site() as (origin, hits, _):
             port = origin.rsplit(":", 1)[1]

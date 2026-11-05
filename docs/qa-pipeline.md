@@ -54,8 +54,8 @@ options = BrowserOptions(
 ## 단계별 계약
 
 1. **해석:** 원본 제보 이미지와 정제된 설명을 모델에 전달합니다. `observed_facts`, `hypotheses`, `expected_behavior`, `expectation_source`, `symptom_description`, `preconditions`, `questions`를 구분합니다.
-2. **페이지 관찰:** 승인된 URL을 새 브라우저에서 열어 최대 80개 요소와 마스킹된 화면을 수집합니다. 요소는 CSS 선택자·태그·이름·짧은 텍스트·활성화 상태, `bounds`, `client_size`, `scroll_size`를 포함합니다. 위치와 크기는 실제 현재 화면의 측정값이며 평가용 정답이 아닙니다. 전체 DOM과 입력값은 보내지 않습니다.
-3. **계획:** 현재 페이지와 원본 제보 이미지(있는 경우)를 구분해 모델에 전달합니다. 모델은 최대 20개 `navigate/click/fill/assert_text`와 `ready/expected/symptom` 조건을 생성합니다. 첫 URL은 백엔드에 등록된 입력으로 고정합니다. 다른 URL도 매번 범위를 검사합니다.
+2. **페이지 관찰:** 승인된 URL을 새 브라우저에서 열어 최대 80개 요소와 마스킹된 화면을 수집합니다. 요소는 CSS 선택자·태그·이름·짧은 텍스트·활성화 상태, `bounds`, `client_size`, `scroll_size`, 제한된 `state_attributes`를 포함합니다. 위치와 크기는 실제 현재 화면의 측정값이며 평가용 정답이 아닙니다. 전체 DOM과 입력값은 보내지 않습니다.
+3. **계획:** 현재 페이지와 원본 제보 이미지(있는 경우)를 구분해 모델에 전달합니다. 모델은 최대 20개 `navigate/reload/back/click/fill/assert_text`와 `ready/expected/symptom` 조건을 생성합니다. 첫 URL은 백엔드에 등록된 입력으로 고정합니다. 다른 URL도 매번 범위를 검사합니다.
 4. **실행:** 동작 전후 화면을 저장합니다. 중간 완료는 `assert_text`, 최종 완료는 `ready`로 확인합니다. 새 컨텍스트·서버 초기화로 같은 계획을 두 번 실행합니다.
 5. **보정:** `STEP_OR_READINESS_FAILED`가 발생한 실제 조작 단계에 한해, 실패 시점 화면에 존재하는 선택자로 바꿀 수 있습니다. 동작·입력값·순서·최종 조건은 변경 불가입니다. 보정 후 이전 실행을 확정 근거로 합치지 않고 두 시도를 다시 실행합니다.
 6. **판정·보고:** 엔진이 판정한 결과를 모델에 전달해 원인 가설·해결 방향을 작성합니다. 모델 요약에 실패해도 이미 얻은 실행 결과는 보존됩니다. 코드 수정·패치·PR·개발자 알림은 수행하지 않습니다.
@@ -64,13 +64,13 @@ options = BrowserOptions(
 
 ### 실행 전 계획 검증과 재작성
 
-모델 작성 형식은 `setup_steps`와 `final_action`을 분리합니다. 준비 단계는 최대 18개이며, 마지막 조작은 `navigate/click/fill` 중 하나여야 합니다. 정적 관찰은 준비 단계 없이 마지막 조작을 페이지 이동으로, 입력 후 상태 검사는 마지막 조작을 입력으로 표현할 수 있습니다. 마지막 검사 단계를 없애기 위해 클릭을 덧붙이는 오류를 줄이기 위한 구조입니다. 엔진이 최초 등록 URL 이동을 보장하며 모델이 빠뜨린 경우 앞에 추가합니다. 따라서 새 브라우저에서 준비 단계가 빈 페이지에 실행되지 않습니다. 모델 응답 검증 후 기존 `steps` 배열로 합치므로 저장된 시나리오·백엔드·재검증 계약은 유지됩니다. 임의의 동작·검사를 자동 삭제하지 않습니다.
+모델 작성 형식은 `setup_steps`와 `final_action`을 분리합니다. 준비 단계는 최대 18개이며, 마지막 조작은 `navigate/reload/back/click/fill` 중 하나여야 합니다. 정적 관찰은 준비 단계 없이 마지막 조작을 페이지 이동으로, 입력 후 상태 검사는 마지막 조작을 입력으로 표현할 수 있습니다. 마지막 검사 단계를 없애기 위해 클릭을 덧붙이는 오류를 줄이기 위한 구조입니다. 엔진이 최초 등록 URL 이동을 보장하며 모델이 빠뜨린 경우 앞에 추가합니다. 따라서 새 브라우저에서 준비 단계가 빈 페이지에 실행되지 않습니다. 모델 응답 검증 후 기존 `steps` 배열로 합치므로 저장된 시나리오·백엔드·재검증 계약은 유지됩니다. 임의의 동작·검사를 자동 삭제하지 않습니다.
 
 참·거짓 검사는 JSON Schema에서 `true/false` 문자열만 허용하고, 두 요소 검사는 두 번째 선택자를 필수로 요구합니다. `ready`가 `expected` 또는 `symptom`과 같거나, 마지막 단계에서 결과를 강제하거나, 제보에 없는 입력을 생성하면 실행 전에 거절합니다. 비어 있지 않은 `fill` 값은 정제된 `description/expected_result/test_data` 중 하나에 원문 그대로 포함되어야 합니다. 이 검사는 입력의 출처를 확인할 뿐, 입력의 의미나 사용 순서가 옳다는 것을 증명하지는 않습니다. 필요한 입력이 없으면 추가 질문으로 넘겨야 합니다.
 
 거절 시 오류 코드와 문제 필드 경로를 모델에 전달하여 기본 1회 재작성을 허용합니다. 이 단계는 재현 실행 이전이며 브라우저 판정이나 평가 정답을 피드백하지 않습니다. 유효한 계획을 확정한 뒤의 재현 실행과 수정 후 재검증에서는 기존처럼 입력·순서·판정 조건을 고정합니다. 범위 위반이나 비밀 값은 재작성으로 우회하지 않습니다.
 
-`report.plan_validation`은 `{proposal, code, field}` 배열입니다. `proposal`은 0부터 시작합니다. 코드는 `PLAN_INVALID_CONTRACT`, `PLAN_FINAL_ASSERTION`, `PLAN_READINESS_IS_OUTCOME`, `PLAN_UNSUPPORTED_INPUT`입니다. 최종 거절의 상위 오류 코드는 기존 `INVALID_PLAN_OR_BASELINE`을 유지합니다. 모델 호출 기록에는 `plan_revision`, 진행 이벤트에는 `plan_rejected`가 추가됩니다. 기존 `schema_version=2`의 선택적 필드 추가이므로 소비자는 알 수 없는 필드·이벤트를 허용해야 합니다.
+`report.plan_validation`은 `{proposal, code, field}` 배열입니다. `proposal`은 0부터 시작합니다. 코드는 `PLAN_INVALID_CONTRACT`, `PLAN_FINAL_ASSERTION`, `PLAN_READINESS_IS_OUTCOME`, `PLAN_UNSUPPORTED_INPUT` 등입니다. 0.7.0은 전체 body/html/*의 정확 텍스트 비교를 거절하는 `PLAN_OVERBROAD_TEXT_TARGET`도 추가합니다. 최종 거절의 상위 오류 코드는 기존 `INVALID_PLAN_OR_BASELINE`을 유지합니다. 모델 호출 기록에는 `plan_revision`, 진행 이벤트에는 `plan_rejected`가 추가됩니다. 기존 `schema_version=2`의 선택적 필드 추가이므로 소비자는 알 수 없는 필드·이벤트를 허용해야 합니다.
 
 한글 등 비 ASCII 제보는 모델이 읽는 텍스트에서 원문을 유지합니다. 잘림은 원문 문자열이 DOM에 남아 있을 수 있으므로 `text` 비교가 아니라 `clipped` 검사로 검증해야 합니다. 초기 화면 상태와 최종 작업 완료 신호도 구분합니다.
 
@@ -93,11 +93,11 @@ options = BrowserOptions(
 | `overlap` | `true/false`; 두 표시 요소의 사각 영역이 양축으로 1px 초과 교차하는지 검사. `other_selector` 필수 |
 | `clipped` | `true/false`; 화면 경계 초과 또는 요소 스크롤 크기가 내부 크기를 1px 초과하는지 검사 |
 
-`other_selector`는 overlap 외에는 빈 문자열입니다. text/enabled/overlap/clipped의 대상이 없거나 여러 개면 판단을 보류합니다. 이 검사는 임의 픽셀 비교·드래그·iframe 내부 탐색·소스 코드 검사·성능 벤치마크를 수행하지 않습니다. 겹침과 넘침이 의도된 디자인인지 판단할 기준은 제보·제품 요구사항에서 제공해야 합니다.
+0.7.0의 `url_path/attribute` 검사와 새로운 동작·오류 필드는 [확장 계약](qa-actions-and-diagnostics.md)을 참고하세요. `other_selector`는 overlap의 두 번째 선택자, response_status의 메서드, attribute의 허용된 ARIA 속성 이름이며 나머지는 빈 문자열입니다. text/enabled/overlap/clipped의 대상이 없거나 여러 개면 판단을 보류합니다. 이 검사는 임의 픽셀 비교·드래그·iframe 내부 탐색·소스 코드 검사·성능 벤치마크를 수행하지 않습니다. 겹침과 넘침이 의도된 디자인인지 판단할 기준은 제보·제품 요구사항에서 제공해야 합니다.
 
 완료 조건 확인 뒤 `symptom=true, expected=false`일 때 증상 관찰, 그 반대는 정상 결과 관찰입니다. 둘 다 참이거나 둘 다 거짓이면 `ORACLE_AMBIGUOUS`로 보류합니다. 두 시도의 관찰이 일치해야 `reproduced` 또는 `not_reproduced`가 됩니다.
 
-AI 계획의 마지막 동작은 `navigate/fill/click`이어야 합니다. 마지막에 정상 결과를 `assert_text`로 강제하면 버그 화면에서는 판정 단계에 도달하지 못하므로 이러한 계획은 실행 전에 거절합니다. 최종 완료 신호는 `ready`, 정상·버그 결과는 `expected/symptom`에만 넣습니다. 중간 상태를 확인하는 `assert_text`는 계속 지원합니다.
+AI 계획의 마지막 동작은 `navigate/reload/back/fill/click`이어야 합니다. 마지막에 정상 결과를 `assert_text`로 강제하면 버그 화면에서는 판정 단계에 도달하지 못하므로 이러한 계획은 실행 전에 거절합니다. 최종 완료 신호는 `ready`, 정상·버그 결과는 `expected/symptom`에만 넣습니다. 중간 상태를 확인하는 `assert_text`는 계속 지원합니다.
 
 ## 결과·이벤트와 화면 연결
 

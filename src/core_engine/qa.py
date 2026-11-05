@@ -107,22 +107,28 @@ class _ModelCalls:
         self.model, self.limits, self.guard = model, limits, guard
         self.redactor = redactor
         self.records = []
+        self.limit_events = []
         self.tokens = 0
 
     async def invoke(self, phase, instructions, context, schema, images=(), *, model=None):
         self.guard()
-        if len(self.records) >= self.limits.max_model_calls:
-            raise PolicyError("MODEL_CALL_LIMIT")
-        if self.tokens >= self.limits.max_reported_tokens:
-            raise PolicyError("MODEL_TOKEN_LIMIT")
+        provider = model if model is not None else self.model
+        configured = getattr(provider, "model", None)
+        configured = self.redactor(configured[:200]) if isinstance(configured, str) else None
+        limit = "MODEL_CALL_LIMIT" if len(self.records) >= self.limits.max_model_calls else (
+            "MODEL_TOKEN_LIMIT" if self.tokens >= self.limits.max_reported_tokens else None)
+        if limit:
+            self.limit_events.append({"phase": phase, "role": "critic" if phase == "plan_review" else "primary",
+                "configured_model": configured, "error_code": limit, "call_started": False})
+            raise PolicyError(limit)
         record = {"phase": phase, "role": "critic" if phase == "plan_review" else "primary",
-                  "status": "started", "model": None, "usage": None}
+                  "status": "started", "configured_model": configured, "model": None, "usage": None}
         self.records.append(record)
         call_started = time.monotonic()
         arguments = dict(instructions=instructions, context=clean_tree(context, self.redactor), schema=schema)
         if images:
             arguments["images"] = images
-        task = asyncio.create_task(asyncio.to_thread((model if model is not None else self.model).generate, **arguments))
+        task = asyncio.create_task(asyncio.to_thread(provider.generate, **arguments))
         try:
             while not task.done():
                 self.guard()
@@ -245,6 +251,7 @@ class QAService:
                 "run": asdict(run) if run else None, "analysis": analysis,
                 "questions": list(questions), "error_code": error,
                 "observations": recorder.snapshots, "repairs": repairs, "model_calls": calls.records,
+                "model_limit_events": calls.limit_events,
                 "plan_validation": plan_validation,
                 "plan_review": plan_review,
                 "source_screenshot": image_ref, "baseline_job_id": _baseline, "parent_job_id": _parent,
@@ -431,7 +438,7 @@ class QAService:
                         break
                     index = failure.completed_steps
                     step = plan.steps[index]
-                    if step.action == "navigate":
+                    if step.action not in {"click", "fill", "assert_text"}:
                         break
                     snapshot = next((s for s in reversed(recorder.snapshots) if s["id"] in failure.observation_ids
                                      and s["phase"] == "blocked"), None)

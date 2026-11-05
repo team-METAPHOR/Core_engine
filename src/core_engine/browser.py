@@ -206,7 +206,7 @@ class BrowserRunner:
                         snapshot = await session.capture(ordinal, index, "before")
                         if snapshot:
                             snapshots.append(snapshot["id"])
-                        if index == len(plan.steps) - 1 and step.action != "navigate" and getattr(plan.ready, "kind", "text") == "text":
+                        if index == len(plan.steps) - 1 and step.action not in {"navigate", "reload", "back"} and getattr(plan.ready, "kind", "text") in {"text", "attribute"}:
                             try:
                                 already_ready = await observe_check(session.page, plan.ready, session.network)
                             except PolicyError:
@@ -217,12 +217,14 @@ class BrowserRunner:
                                 # A local handler can refresh the same completion text without
                                 # making a request or changing a defective result. Observe the
                                 # signal itself so that this still counts as fresh processing.
-                                completion_tracker = await session.page.locator("css=" + plan.ready.selector).evaluate_handle("""node => {
+                                attribute = plan.ready.other_selector if isinstance(plan.ready, Check) and plan.ready.kind == "attribute" else None
+                                completion_tracker = await session.page.locator("css=" + plan.ready.selector).evaluate_handle("""(node, attribute) => {
                                     const state = {mutations: 0};
                                     state.observer = new MutationObserver(records => state.mutations += records.length);
-                                    state.observer.observe(node, {childList: true, characterData: true, subtree: true});
+                                    state.observer.observe(node, attribute ? {attributes: true, attributeFilter: [attribute]}
+                                        : {childList: true, characterData: true, subtree: true});
                                     return state;
-                                }""")
+                                }""", attribute)
                                 try:
                                     before_outcomes = (
                                         await observe_check(session.page, plan.expected, session.network) if plan.expected else None,
@@ -231,6 +233,8 @@ class BrowserRunner:
                                     before_outcomes = None
                         if step.action == "navigate":
                             await session.navigate(step.target)
+                        elif step.action in {"reload", "back"}:
+                            await session.history_action(step.action)
                         else:
                             locator = session.page.locator("css=" + step.target)
                             if step.action == "click":
@@ -243,6 +247,7 @@ class BrowserRunner:
                             else:
                                 await expect(locator).to_have_text(step.value, timeout=plan.step_timeout_ms, use_inner_text=True)
                         session.check()
+                        session.transport.policy.check_url(session.page.url)
                         completed += 1
                         if self.recorder:
                             self.recorder.progress(attempt=ordinal, phase="action_completed", step_index=index,

@@ -80,7 +80,7 @@ class CredentialHTTPSTests(unittest.TestCase):
                 with patch('core_engine.transport.ssl.create_default_context', return_value=untrusted), \
                         self.assertRaises(PolicyError) as error:
                     transport.fetch(origin + '/app/bug')
-                self.assertEqual(error.exception.code, 'TRANSPORT_ERROR')
+                self.assertEqual(error.exception.code, 'TLS_CERTIFICATE_ERROR')
                 self.assertEqual(hits, [])
             finally:
                 transport.close()

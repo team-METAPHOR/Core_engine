@@ -173,6 +173,14 @@ class GuardedTransport:
             except TimeoutError:
                 self.budget.check_runtime()
                 raise PolicyError("TRANSPORT_TIMEOUT") from None
+            except ssl.SSLCertVerificationError:
+                raise PolicyError("TLS_CERTIFICATE_ERROR") from None
+            except ssl.SSLError:
+                raise PolicyError("TLS_HANDSHAKE_ERROR") from None
+            except ConnectionRefusedError:
+                raise PolicyError("CONNECTION_REFUSED") from None
+            except (ConnectionResetError, http.client.RemoteDisconnected):
+                raise PolicyError("CONNECTION_RESET") from None
             except (OSError, http.client.HTTPException):
                 raise PolicyError("TRANSPORT_ERROR") from None
             finally:
