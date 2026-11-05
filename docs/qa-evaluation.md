@@ -91,6 +91,7 @@ PYTHONPATH=src python -m core_engine.evaluation --live \
 |---|---|
 | `--live` | 생략하면 고정 모델. 지정하면 실제 유료 모델 호출 |
 | `--suite` | `core`: 기존 12개. `transfer`: 추가 개발 사례 8개 |
+| `--critic` | `none` 기본. `self` 주 모델 자체 검토, `groq` 두 번째 공급자 검토. `--live` 필요 |
 | `--repeats` | 3회. 1~10회 허용 |
 | `--case` | 생략하면 12개 전체. 여러 번 지정하여 선택 가능 |
 | `--seed` | 17. 사례 실행 순서의 무작위화만 고정하며 모델의 샘플링 결과를 고정하지 않음 |
@@ -101,6 +102,8 @@ PYTHONPATH=src python -m core_engine.evaluation --live \
 전체 3회 반복은 최초 작업 **36개**, `--retest-fixed` 사용 시 비교 항목 **12개**다. 기준 버그 재현에 실패한 항목은 재검증 호출을 하지 않고 `BASELINE_NOT_CONFIRMED`로 실패 집계한다. 성공한 기준만 분모로 삼아 수정 확인 성공률을 부풀리지 않는다.
 
 전체 호출 상한에 도달하면 진행 중 작업은 엔진의 `MODEL_CALL_LIMIT`으로 처리하고 나머지는 `not_run/EVAL_MODEL_CALL_LIMIT`으로 남긴다. `Ctrl+C`는 종료 코드 130이며, 이미 저장된 결과는 유지된다. 키·설정 누락은 호출 전에 거절한다.
+
+비판자 비교에서는 같은 엔진 코드·사례·반복·순서·전체 호출 상한을 사용한다. 추가 검토가 필요한 경우 양 조건에 충분한 동일 상한을 지정한다. `manifest.json`에 `critic`, `critic_model`을, `model_calls.json`에 `role=primary/critic`을 기록한다. 두 모델 모두 전체 호출 상한을 공유한다. `--critic groq`는 `GROQ_API_KEY/GROQ_MODEL` 설정이 필요하며 수정 후 재검증에서는 비판자를 호출하지 않는다. 검토 입력에는 평가자용 사례 ID·정답·reference plan·독립 채점 결과를 넣지 않는다. [비판 모델 계약](critic-review-proposal.md)을 참고한다.
 
 종료 코드 0은 계획한 항목의 채점이 모두 통과했다는 뜻이다. 1은 실패 항목 또는 미실행이 있다는 뜻이며, 실제 AI 평가에서는 정상적인 측정 결과일 수 있다. JSON의 `complete`, `harness_errors`, `valid_for_comparison`을 함께 확인한다.
 

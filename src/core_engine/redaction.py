@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 _URL = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _HEADERS = re.compile(r"^(\s*(?:authorization|cookie|set-cookie)\s*:)\s*[^\r\n]*", re.IGNORECASE | re.MULTILINE)
 _AUTH = re.compile(r"\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
-_KEY = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
+_KEY = re.compile(r"\b(?:sk-|gsk_)[A-Za-z0-9_-]{8,}\b")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _SECRET = re.compile(
     r"(\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|"

@@ -20,7 +20,7 @@ import time
 import traceback
 from uuid import uuid4
 
-from core_engine import BrowserOptions, BrowserRunner, JobStore, ModelError, OpenAIModel, PolicyError, QARequest, QAService, Recorder
+from core_engine import BrowserOptions, BrowserRunner, GroqModel, JobStore, ModelError, OpenAIModel, PolicyError, QARequest, QAService, Recorder
 from core_engine.qa_schema import decode_plan
 from . import SUITE_VERSION
 from .cases import CASES, reference_plan
@@ -62,7 +62,7 @@ class CallBudget:
         with self.lock:
             return copy.deepcopy(self.calls)
 
-    def wrap(self, model, trial_id):
+    def wrap(self, model, trial_id, role="primary"):
         budget = self
 
         class TrackedModel:
@@ -70,7 +70,7 @@ class CallBudget:
                 with budget.lock:
                     if len(budget.calls) >= budget.maximum:
                         raise PolicyError("MODEL_CALL_LIMIT")
-                    record = {"trial_id": trial_id, "status": "started", "model": None, "usage": None}
+                    record = {"trial_id": trial_id, "role": role, "status": "started", "model": None, "usage": None}
                     budget.calls.append(record)
                 started = time.monotonic()
                 try:
@@ -138,8 +138,8 @@ def blank_row(case, repeat, kind="initial"):
             "elapsed_seconds": 0, "report_path": None, "oracle_path": None, "regression": None}
 
 
-async def evaluate_job(case, site, store, options, model, *, request=None, baseline=None):
-    service = QAService(model, site.policy(), store, options=options)
+async def evaluate_job(case, site, store, options, model, *, request=None, baseline=None, reviewer=None):
+    service = QAService(model, site.policy(), store, options=options, reviewer=reviewer)
     started = time.monotonic()
     if baseline:
         result = await service.retest(baseline, reset=reset, is_authorized=lambda: True)
@@ -190,7 +190,14 @@ def source_metadata():
     return metadata
 
 
-async def run_suite(args, provider=None):
+async def run_suite(args, provider=None, reviewer=None):
+    critic_mode = getattr(args, "critic", "none")
+    if critic_mode not in {"none", "self", "groq"}:
+        raise ValueError("unknown critic mode")
+    if critic_mode != "none" and (not args.live or reviewer is None):
+        raise ValueError("critic evaluation requires live mode and an explicit reviewer")
+    if critic_mode == "none" and reviewer is not None:
+        raise ValueError("reviewer supplied while critic mode is disabled")
     suite = getattr(args, "suite", "core")
     if suite not in {"core", "transfer"}:
         raise ValueError("unknown evaluation suite")
@@ -215,6 +222,7 @@ async def run_suite(args, provider=None):
     manifest = {**source_metadata(), "suite_version": suite_version, "suite": suite,
         "mode": "live" if args.live else "fixture",
         "model": getattr(provider, "model", "offline-fixture"), "seed": args.seed,
+        "critic": critic_mode, "critic_model": getattr(reviewer, "model", None),
         "repeats": args.repeats, "max_model_calls": args.max_model_calls, "retest_fixed": args.retest_fixed,
         "cases": [asdict(case) for case in selected], "order": [[case.id, repeat] for case, repeat in tasks],
         "labels_sent_to_model": False, "input_policy": "Identical reporter image/text for each bug/control pair; neutral random target paths.",
@@ -238,7 +246,9 @@ async def run_suite(args, provider=None):
                     site.activate(case.variant)
                     request = QARequest(uuid4().hex, "qa-evaluation", site.url, image, **case.report_text())
                     base_model = provider if args.live else FixtureModel(case, site.url, reference_builder)
-                    data, oracle, record = await evaluate_job(case, site, store, options, budget.wrap(base_model, trial_id), request=request)
+                    data, oracle, record = await evaluate_job(case, site, store, options,
+                        budget.wrap(base_model, trial_id), request=request,
+                        reviewer=budget.wrap(reviewer, trial_id, "critic") if reviewer is not None else None)
                     rows[index].update(record)
                     rows[index]["report_path"] = (store.root / data["job_id"] / "report.md").relative_to(root).as_posix()
                     if oracle:
@@ -255,7 +265,8 @@ async def run_suite(args, provider=None):
                             fixed_case = replace(case, category="normal", variant="control")
                             after, fixed_oracle, fixed_record = await evaluate_job(
                                 fixed_case, site, store, replace(options, app_version="evaluation-2"),
-                                budget.wrap(base_model, trial_id + "_retest"), baseline=data["job_id"])
+                                budget.wrap(base_model, trial_id + "_retest"), baseline=data["job_id"],
+                                reviewer=budget.wrap(reviewer, trial_id + "_retest", "critic") if reviewer is not None else None)
                             same = data["report"]["plan_sha256"] == after["report"]["plan_sha256"]
                             fixed_record["passed"] &= same and after["report"]["regression"] == "resolved_in_test"
                             if not same:
@@ -286,6 +297,8 @@ async def run_suite(args, provider=None):
 def main():
     parser = argparse.ArgumentParser(description="소규모 합성 QA 평가. 기본값은 고정 모델 연결 검증입니다.")
     parser.add_argument("--live", action="store_true", help="실제 유료 모델 호출; 환경변수 설정 필요")
+    parser.add_argument("--critic", choices=("none", "self", "groq"), default="none",
+                        help="실행 전 검토 없음 / 주 모델 자체 검토 / Groq 비판자. --live 필요")
     parser.add_argument("--list", action="store_true", help="평가 사례만 출력")
     parser.add_argument("--suite", choices=("core", "transfer"), default="core", help="기존 12개 또는 추가 8개 개발 사례")
     parser.add_argument("--case", action="append", choices=[case.id for case in (*CASES, *transfer.CASES)], help="여러 번 지정 가능")
@@ -303,12 +316,15 @@ def main():
     if args.list:
         print(json.dumps([{"id": case.id, "category": case.category} for case in cases], ensure_ascii=False, indent=2))
         return
+    if args.critic != "none" and not args.live:
+        parser.error("비판자 비교는 --live와 함께 실행하세요. 고정 모델 점수와 혼합하지 않습니다.")
     try:
         provider = OpenAIModel.from_env() if args.live else None
+        reviewer = GroqModel.from_env() if args.critic == "groq" else provider if args.critic == "self" else None
     except ValueError as exc:
         parser.error(str(exc))
     try:
-        root, summary, rows = asyncio.run(run_suite(args, provider))
+        root, summary, rows = asyncio.run(run_suite(args, provider, reviewer))
     except KeyboardInterrupt:
         raise SystemExit(130) from None
     print(json.dumps({"summary": str(root / "summary.md"), **summary}, ensure_ascii=False), flush=True)

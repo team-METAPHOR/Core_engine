@@ -5,6 +5,7 @@ import json
 from PIL import Image
 
 from core_engine import Generation, Screenshot, TokenUsage
+from core_engine.qa_schema import PLAN_SCHEMA, draft_plan
 
 
 def screenshot():
@@ -61,4 +62,7 @@ class ScriptedModel:
             raise response
         if callable(response):
             response = response(kwargs)
-        return Generation(json.dumps(copy.deepcopy(response)), 'offline-fixture', TokenUsage(100, 100))
+        response = copy.deepcopy(response)
+        if kwargs.get('schema') == PLAN_SCHEMA and response.get('plan') is not None:
+            response['plan'] = draft_plan(response['plan'])
+        return Generation(json.dumps(response), 'offline-fixture', TokenUsage(100, 100))

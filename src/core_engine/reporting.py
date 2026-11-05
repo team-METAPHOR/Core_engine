@@ -50,6 +50,17 @@ def render_report(report: dict) -> str:
     if report.get('plan_validation'):
         lines += ['', '## 실행 전 계획 검증', '']
         lines += [f"- 계획 제안 {item['proposal'] + 1}: " + escape(item['code']) for item in report['plan_validation']]
+    if report.get('plan_review', {}).get('enabled'):
+        item = report['plan_review']
+        lines += ['', '## 실행 전 비판 모델 검토', '', '- 상태: ' + escape(item['status'])]
+        if item.get('review'):
+            lines += ['', escape(item['review']['summary'])]
+            lines += ['- ' + escape(issue['code'] + ': ' + issue['reason']) for issue in item['review']['issues']]
+        if item['status'] == 'revised_unreviewed':
+            lines += ['', '지적 후 수정된 계획은 호스트 검증을 통과했습니다. 비판 모델의 재검토는 수행하지 않았습니다.']
+        if item.get('reviewed_plan_sha256') and item.get('final_plan_sha256') != item['reviewed_plan_sha256']:
+            lines += ['', '검토한 초기 계획과 최종 실행 계획의 해시가 다릅니다. 초기 검토를 최종 계획의 승인으로 해석하지 마세요.']
+        lines += ['', '비판 모델의 동의는 버그 판정이 아닙니다. 판정은 브라우저 관찰 근거를 따릅니다.']
     if report.get('scenario'):
         lines += ['', '## 재현 순서', '']
         for i, step in enumerate(report['scenario']['steps'], 1):

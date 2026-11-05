@@ -133,7 +133,7 @@ class QATests(unittest.IsolatedAsyncioTestCase):
             model = ScriptedModel([intake(), data])
             result = await self.service(model, origin, limits=QALimits(max_plan_revisions=0)).run(
                 self.request(origin), reset=reset, is_authorized=lambda: True)
-            self.assertEqual(result.error_code, 'INVALID_PLAN_OR_BASELINE', result)
+            self.assertEqual(result.error_code, 'MODEL_INVALID_OUTPUT', result)
             self.assertIsNone(result.report['run'])
             self.assertEqual(len(model.calls), 2)
             self.assertEqual([s['phase'] for s in result.report['observations']], ['discovery'])

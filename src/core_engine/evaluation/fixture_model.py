@@ -3,7 +3,7 @@
 import json
 
 from core_engine import Generation, TokenUsage
-from core_engine.qa_schema import encode_plan
+from core_engine.qa_schema import draft_plan, encode_plan
 from .cases import reference_plan
 
 
@@ -26,7 +26,7 @@ class FixtureModel:
                 "questions": ["기대 동작과 사용한 검색어를 알려주세요."] if missing else []}
         elif "plan" in fields:
             value = {"status": "ready", "questions": [], "rationale": "고정 응답으로 실행기 검증",
-                     "plan": encode_plan(self.reference_builder(self.case.family, self.url))}
+                     "plan": draft_plan(encode_plan(self.reference_builder(self.case.family, self.url)))}
         elif "target" in fields:
             value = {"status": "stop", "target": "", "reason": "고정 모델은 자동 보정하지 않음", "questions": []}
         else:

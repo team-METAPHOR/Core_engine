@@ -5,6 +5,7 @@ from .analysis import AnalysisResult, AnalysisService, Assessment, BugReport, Hy
 from .browser import BrowserRun, BrowserRunner, Evidence
 from .model import Generation, JsonModel, ModelError, TokenUsage
 from .openai_provider import OpenAIModel
+from .groq_provider import GroqModel
 from .artifacts import JobStore
 from .checks import Check
 from .images import Screenshot
@@ -35,6 +36,7 @@ __all__ = [
     "BrowserRunner",
     "Evidence",
     "Generation",
+    "GroqModel",
     "Hypothesis",
     "JsonModel",
     "ModelError",

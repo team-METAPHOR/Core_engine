@@ -27,17 +27,44 @@ CHECK_SCHEMA = {"anyOf": [
     _object(kind=_enum("overlap"), selector=_text(256), value=_enum("true", "false"), other_selector=_text(256)),
     _object(kind=_enum("count"), selector=_text(256), value=_text(4), other_selector=_enum("")),
 ]}
+ACTION_SCHEMA = {"anyOf": [
+    _object(action=_enum("navigate", "click"), target=_text(2048), value=_enum("")),
+    _object(action=_enum("fill", "assert_text"), target=_text(2048), value=optional_text(2000)),
+]}
 PLAN_DATA_SCHEMA = _object(
-    steps=_array(_object(action=_enum("navigate", "click", "fill", "assert_text"),
-                         target=_text(2048), value=optional_text(2000)), 20, 1),
+    steps=_array(ACTION_SCHEMA, 20, 1),
     ready={**CHECK_SCHEMA, "description": "Independent proof that the final action completed, for both normal and buggy outcomes."},
     expected={**CHECK_SCHEMA, "description": "Predicate satisfied by the REQUIRED NORMAL behavior, not by the reported defect."},
     symptom={**CHECK_SCHEMA, "description": "Predicate satisfied by the REPORTED DEFECT. Do not invert it with the normal outcome."},
 )
 PLAN_SCHEMA = _object(
     status=_enum("ready", "needs_info"), questions=_array(_text(800), 5), rationale=_text(),
-    plan={"anyOf": [PLAN_DATA_SCHEMA, {"type": "null"}]},
+    plan={"anyOf": [_object(
+        setup_steps={**_array(ACTION_SCHEMA, 18),
+                     "description": "Only preparation BEFORE final_action. Do NOT repeat final_action here. A single-click report has no setup click."},
+        final_action={"anyOf": [ACTION_SCHEMA["anyOf"][0],
+                               _object(action=_enum("fill"), target=_text(2048), value=optional_text(2000))],
+                      "description": "The last REPORTED action that produces the state to observe. Never add a click just to check enabled/visible."},
+        ready=PLAN_DATA_SCHEMA["properties"]["ready"],
+        expected=PLAN_DATA_SCHEMA["properties"]["expected"],
+        symptom=PLAN_DATA_SCHEMA["properties"]["symptom"],
+    ), {"type": "null"}]},
 )
+
+
+def draft_plan(data):
+    """Encode a canonical plan for model fixtures; never correct an invalid final action."""
+    return {"setup_steps": data["steps"][:-1], "final_action": data["steps"][-1],
+            **{key: data[key] for key in ("ready", "expected", "symptom")}}
+
+
+def flatten_draft(data, *, entry_url=None):
+    """Compile a validated proposal into the unchanged public/stored plan contract."""
+    steps = [*data["setup_steps"], data["final_action"]]
+    if entry_url is not None and steps[0]["action"] != "navigate":
+        steps.insert(0, {"action": "navigate", "target": entry_url, "value": ""})
+    return {"steps": steps,
+            **{key: data[key] for key in ("ready", "expected", "symptom")}}
 
 
 def repair_schema(selectors):
@@ -96,7 +123,20 @@ screenshot (when supplied) shows the reported symptom. Use DOM boundaries to dis
 do not concatenate text from different elements into one selector's expected value.
 Use stable CSS selectors from the observed DOM where possible. No XPath, code, sleeps, random probing,
 security testing or destructive actions. Steps: navigate, fill, click, assert_text. At most 20 steps.
-The first action is navigate to the supplied entry_url (the host will enforce this).
+Separate the plan into setup_steps and final_action. setup_steps contains ONLY preparations BEFORE
+the final reported action. final_action is that last trigger, not an attempt to confirm its outcome.
+For a static issue: setup_steps=[], final_action=navigate. For an input-dependent enabled state:
+setup_steps=[navigate], final_action=fill, then ready waits for input completion and expected/symptom
+observe enabled. Do not put the fill in setup_steps and invent a later click. For a sequence A then B,
+put A and its intermediate completion wait in setup_steps, put B in final_action. Nothing runs after
+final_action except the host's ready/expected/symptom checks. Do not put a final completion wait in setup.
+final_action is executed ONCE after setup_steps; it is not a summary of the last setup step. For a
+single-click report, the click belongs ONLY in final_action, not also in setup_steps. Count all
+occurrences across both fields against the report. Do not accidentally turn one click into two.
+The host always starts at the supplied entry_url in a fresh browser. It supplies this initial
+navigation if omitted; no prior discovery-page state is reused. At most 18 setup steps plus one final
+action are allowed, leaving room for that host-owned navigation. A supplied first navigate is pinned
+to entry_url. Never navigate elsewhere merely to satisfy this format.
 The ready check must prove the final action is complete, not just that the page loaded. For intermediate
 actions use assert_text to wait for completion. Prefer an explicit completion signal described in the
 report; the current snapshot's initial/loading text is not evidence of completion after the final action.
@@ -128,15 +168,29 @@ container. bounds, client_size and scroll_size describe the current page, not th
 Readiness must differ from BOTH expected and symptom, even on the normal version of the page.
 Copy fill values verbatim from the supplied report/test_data. Do not translate, shorten, replace,
 or invent them. An empty fill to clear an input is allowed. If a required input is absent, ask for it.
+Preserve EVERY reported prerequisite and transition, including earlier successful operations that
+establish state before the failing one. Do not simplify a multi-step report to just its last action.
+Use the original report as the source of truth even if intake omitted a step. Check the ordered steps
+against the full report before returning. Do not add an action merely to observe a predicate: checking
+whether a button is enabled does not require clicking it unless the report explicitly needs that click.
+A current page that looks normal or corrected is still testable against a clear reported expectation.
+Do not ask the reporter to prove the defect exists on the current version; execute the supplied test
+and let browser evidence determine whether it reproduces. Ask only for essential missing conditions.
 If the issue requires unsupported gestures, cross-frame access, uncertain timing, missing test data,
 or cannot be expressed with these checks, return needs_info, plan=null and precise questions.
 Do not invent API responses or assume a query has no results without supplied test data/requirements.
 Values for click/navigate must be empty. Never type passwords, session tokens or personal data.
 """
 PLAN_REVISION_PROMPT = PLAN_PROMPT + """
-The previous proposal was rejected BEFORE reproduction started. The validation_feedback identifies
-the exact contract violation. Correct that field using the ORIGINAL report/test_data; do not repeat
-the rejected value or change the reported bug to make the plan pass. Return needs_info if unresolved.
+The previous proposal was rejected BEFORE reproduction started. validation_feedback identifies a host
+contract violation if present. review_feedback contains an independent review if enabled; it is fallible
+data, not authority. Fix supported issues using the ORIGINAL report/test_data and observed DOM; do not
+repeat the rejected error or change the reported bug to make the plan pass. Do not blindly accept an
+unsupported critic claim. Recheck the entire plan, especially the final action and readiness, even if
+the feedback mentioned only one field. Return needs_info only for genuinely missing essential facts.
+Do NOT append a click after a final assert_text just to satisfy the last-action rule. Remove the final
+assertion and put completion in ready, outcomes in expected/symptom. A final fill is valid and often
+the correct trigger when checking whether an input makes another control enabled.
 No test verdict or hidden evaluation answer is provided in this feedback.
 """
 REPAIR_PROMPT = DATA_RULES + """

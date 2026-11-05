@@ -15,7 +15,7 @@ from core_engine.evaluation.grading import grade, summarize
 from core_engine.evaluation.runner import CallBudget, independently_replay, reset, run_suite
 from core_engine.evaluation.site import fixture_site
 from core_engine.evaluation import transfer
-from core_engine.qa_schema import encode_plan
+from core_engine.qa_schema import draft_plan, encode_plan
 
 
 class EvaluationUnitTests(unittest.TestCase):
@@ -119,7 +119,7 @@ class EvaluationBrowserTests(unittest.IsolatedAsyncioTestCase):
                 def generate(self, **kwargs):
                     if 'plan' in kwargs['schema']['properties']:
                         return Generation(json.dumps({'status': 'ready', 'questions': [], 'rationale': '잘못된 계획',
-                                                      'plan': encode_plan(wrong)}), 'offline-fixture')
+                                                      'plan': draft_plan(encode_plan(wrong))}), 'offline-fixture')
                     return super().generate(**kwargs)
 
             service = QAService(WrongPlan(case, site.url), site.policy(), store, options=options)

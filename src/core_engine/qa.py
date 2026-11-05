@@ -15,6 +15,7 @@ from .analysis_schema import analysis_schema, validate_output
 from .artifacts import JobStore
 from .browser import BrowserRunner, plan_digest
 from .budget import BudgetLimits, RequestBudget
+from .critic import REVIEW_PROMPT, REVIEW_SCHEMA, normalize_review, review_context
 from .images import Screenshot
 from .model import ModelError, strict_json
 from .observation import BrowserOptions, Recorder
@@ -22,7 +23,7 @@ from .plan import Step
 from .planning import PlanValidationError, validate_candidate
 from .policy import PolicyError, RunPolicy, canonical_url
 from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PROMPT, PLAN_PROMPT,
-                        PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, encode_plan, repair_schema)
+                        PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, repair_schema)
 from .redaction import redact_text
 from .reporting import render_report
 
@@ -102,18 +103,19 @@ class _ModelCalls:
         self.records = []
         self.tokens = 0
 
-    async def invoke(self, phase, instructions, context, schema, images=()):
+    async def invoke(self, phase, instructions, context, schema, images=(), *, model=None):
         self.guard()
         if len(self.records) >= self.limits.max_model_calls:
             raise PolicyError("MODEL_CALL_LIMIT")
         if self.tokens >= self.limits.max_reported_tokens:
             raise PolicyError("MODEL_TOKEN_LIMIT")
-        record = {"phase": phase, "status": "started", "model": None, "usage": None}
+        record = {"phase": phase, "role": "critic" if phase == "plan_review" else "primary",
+                  "status": "started", "model": None, "usage": None}
         self.records.append(record)
         arguments = dict(instructions=instructions, context=context, schema=schema)
         if images:
             arguments["images"] = images
-        task = asyncio.create_task(asyncio.to_thread(self.model.generate, **arguments))
+        task = asyncio.create_task(asyncio.to_thread((model if model is not None else self.model).generate, **arguments))
         try:
             while not task.done():
                 self.guard()
@@ -149,8 +151,9 @@ class _ModelCalls:
 
 class QAService:
     def __init__(self, model, policy: RunPolicy, store: JobStore, *, options: BrowserOptions | None = None,
-                 limits: QALimits = QALimits(), browser_limits: BudgetLimits | None = None):
+                 limits: QALimits = QALimits(), browser_limits: BudgetLimits | None = None, reviewer=None):
         self.model, self.policy, self.store = model, policy, store
+        self.reviewer = reviewer
         self.options = options or BrowserOptions()
         self.limits = limits
         self.browser_limits = browser_limits or BudgetLimits(max_runtime_seconds=120, max_requests_per_minute=60)
@@ -188,9 +191,14 @@ class QAService:
         self.store.event(job_id, "received", {"parent_job_id": _parent, "baseline_job_id": _baseline})
         intake, plan, run, analysis, repairs = None, None, None, None, []
         plan_validation = []
+        plan_review = {"enabled": self.reviewer is not None, "status": "skipped_retest" if _baseline else
+                       "not_reached" if self.reviewer is not None else "disabled",
+                       "review": None, "reviewed_plan_sha256": None, "final_plan_sha256": None,
+                       "error_code": None}
         baseline_report = None
 
         def finish(status, *, questions=(), error=None):
+            plan_review["final_plan_sha256"] = plan_digest(plan) if plan else None
             classification = (analysis or intake or {}).get("classification", "needs_review")
             report = {
                 "schema_version": "2", "job_id": job_id, "report_id": request.report_id,
@@ -203,6 +211,7 @@ class QAService:
                 "questions": list(questions), "error_code": error,
                 "observations": recorder.snapshots, "repairs": repairs, "model_calls": calls.records,
                 "plan_validation": plan_validation,
+                "plan_review": plan_review,
                 "source_screenshot": image_ref, "baseline_job_id": _baseline, "parent_job_id": _parent,
                 "regression": self._regression(baseline_report, run) if _baseline else None,
                 "limitations": ["관찰된 증상과 실제 제품 요구사항의 일치는 사람이 검토해야 합니다.",
@@ -260,22 +269,62 @@ class QAService:
                         generated = await calls.invoke("plan" if proposal == 0 else "plan_revision",
                                                        PLAN_PROMPT if proposal == 0 else PLAN_REVISION_PROMPT,
                                                        context, PLAN_SCHEMA, images)
-                        if generated["status"] == "needs_info" or generated["plan"] is None or generated["questions"]:
+                        if generated["plan"] is not None:
+                            generated = {**generated, "plan": flatten_draft(generated["plan"], entry_url=redact_text(request.entry_url))}
+                        needs_info = generated["status"] == "needs_info" or generated["plan"] is None or generated["questions"]
+                        candidate, feedback = None, None
+                        if not needs_info:
+                            try:
+                                candidate = validate_candidate(generated["plan"], request.text(),
+                                    entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms)
+                                self._validate_plan(candidate)
+                            except PlanValidationError as exc:
+                                diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field}
+                                plan_validation.append(diagnostic)
+                                self.store.event(job_id, "plan_rejected", diagnostic)
+                                feedback = {**diagnostic, "message": exc.feedback}
+                        revise = False
+                        if proposal == 0 and self.reviewer is not None:
+                            plan_review["status"] = "reviewing"
+                            plan_review["reviewed_plan_sha256"] = plan_digest(candidate) if candidate else None
+                            self.store.event(job_id, "reviewing_plan")
+                            self.store.write_json(job_id, "review_proposal.json", {
+                                "proposal": generated, "validation_feedback": feedback})
+                            try:
+                                review = await calls.invoke("plan_review", REVIEW_PROMPT,
+                                    review_context(request.text(), snapshot, generated, feedback), REVIEW_SCHEMA,
+                                    model=self.reviewer)
+                                review = normalize_review(review)
+                            except asyncio.CancelledError:
+                                plan_review["status"] = "interrupted"
+                                raise
+                            except (ModelError, PolicyError) as exc:
+                                plan_review.update(status="failed", error_code=exc.code)
+                                if calls.records and calls.records[-1]["phase"] == "plan_review":
+                                    calls.records[-1]["status"] = exc.code
+                                raise
+                            plan_review["review"] = review
+                            plan_review["status"] = review["decision"]
+                            self.store.event(job_id, "plan_reviewed", {"decision": review["decision"]})
+                            if review["decision"] == "needs_info":
+                                return finish("needs_info", questions=review["questions"])
+                            revise = review["decision"] == "revise"
+                            context = {**context, "review_feedback": review}
+                        if needs_info and not revise:
                             return finish("needs_info", questions=generated["questions"] or ["재현 순서와 완료 상태를 알려주세요."])
-                        try:
-                            candidate = validate_candidate(generated["plan"], request.text(),
-                                entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms)
-                            self._validate_plan(candidate)
-                        except PlanValidationError as exc:
-                            diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field}
-                            plan_validation.append(diagnostic)
-                            self.store.event(job_id, "plan_rejected", diagnostic)
+                        if feedback or revise:
                             if proposal == self.limits.max_plan_revisions:
+                                if self.reviewer is not None:
+                                    plan_review["status"] = "revision_exhausted"
                                 return finish("failed", error="INVALID_PLAN_OR_BASELINE")
-                            context = {**context, "validation_feedback": {**diagnostic, "message": exc.feedback},
-                                       "rejected_plan": clean_tree(generated["plan"])}
+                            context = {**context, "validation_feedback": feedback,
+                                       "rejected_plan": draft_plan(generated["plan"]) if generated["plan"] else None,
+                                       "previous_questions": generated["questions"]}
                             continue
                         plan = candidate
+                        if self.reviewer is not None:
+                            plan_review["status"] = "accepted" if proposal == 0 else "revised_unreviewed"
+                            plan_review["final_plan_sha256"] = plan_digest(plan)
                         break
                 for revision in range(self.limits.max_repairs + 1):
                     guard()
