@@ -42,6 +42,7 @@ class QARequest:
     description: str = ""
     expected_result: str = ""
     test_data: str = ""
+    reporter_activity: str = ""
 
     def __post_init__(self):
         for value in (self.report_id, self.program_id):
@@ -50,7 +51,8 @@ class QARequest:
         canonical_url(self.entry_url)
         if len(self.entry_url) > 2048:
             raise ValueError("entry URL is too long")
-        for key, maximum in (("description", 8000), ("expected_result", 2000), ("test_data", 2000)):
+        for key, maximum in (("description", 8000), ("expected_result", 2000), ("test_data", 2000),
+                             ("reporter_activity", 8192)):
             value = getattr(self, key)
             if not isinstance(value, str) or len(value) > maximum:
                 raise ValueError("invalid QA request text")
@@ -61,7 +63,10 @@ class QARequest:
             raise ValueError("a screenshot or description is required")
 
     def text(self):
-        return {key: redact_text(getattr(self, key)) for key in ("description", "expected_result", "test_data")}
+        result = {key: redact_text(getattr(self, key)) for key in ("description", "expected_result", "test_data")}
+        if self.reporter_activity:
+            result["reporter_activity"] = redact_text(self.reporter_activity)
+        return result
 
 
 @dataclass(frozen=True)
