@@ -375,7 +375,8 @@ class QAService:
                                "environment": {**self.options.public(), "browser_version": recorder.browser_version,
                                    "state_changes": self.policy.state_changes.public() if self.policy.state_changes else None}}
                     proposal_schema = planning_schema(PLAN_SCHEMA, contract)
-                    recorded = replay_steps(request.reporter_activity, request.entry_url, self.policy)
+                    recorded = replay_steps(request.reporter_activity, request.entry_url, self.policy,
+                                            " ".join(request.text()[key] for key in ("description", "expected_result", "test_data")))
                     if recorded:
                         # The host replays the recording; the model supplies checks and grounded fills only.
                         context["recorded_replay"] = [{key: step[key] for key in ("action", "target")} for step in recorded]
@@ -470,7 +471,9 @@ class QAService:
                         # which never shows the replayed result. Replay once and ground them on that screen.
                         event("discovering", {"replay": True})
                         final = await runner.inspect(request.entry_url, steps=plan.steps[1:], reset=reset,
-                            is_authorized=is_authorized, cancelled=cancelled, budget=budget)
+                            is_authorized=is_authorized, cancelled=cancelled, budget=budget,
+                            probe=tuple(c.selector for c in (plan.ready, plan.expected, plan.symptom)
+                                        if c is not None and getattr(c, "kind", "text") == "text"))
                         guard()
                         while final is not None:
                             try:
