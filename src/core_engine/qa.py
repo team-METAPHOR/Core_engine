@@ -270,7 +270,7 @@ class QAService:
                                                        PLAN_PROMPT if proposal == 0 else PLAN_REVISION_PROMPT,
                                                        context, PLAN_SCHEMA, images)
                         if generated["plan"] is not None:
-                            generated = {**generated, "plan": flatten_draft(generated["plan"], entry_url=request.entry_url)}
+                            generated = {**generated, "plan": flatten_draft(generated["plan"], entry_url=redact_text(request.entry_url))}
                         needs_info = generated["status"] == "needs_info" or generated["plan"] is None or generated["questions"]
                         candidate, feedback = None, None
                         if not needs_info:

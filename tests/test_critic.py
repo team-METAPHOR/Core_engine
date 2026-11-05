@@ -1,4 +1,5 @@
 import copy
+from dataclasses import replace
 import importlib.util
 import tempfile
 import unittest
@@ -64,7 +65,7 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
 
     def service(self, model, origin, reviewer, **kwargs):
         return QAService(model, local_policy(origin), self.store, reviewer=reviewer,
-                         options=BrowserOptions(step_timeout_ms=150), **kwargs)
+                         options=BrowserOptions(step_timeout_ms=1000), **kwargs)
 
     async def test_accept_preserves_browser_truth_and_retest_skips_critic(self):
         with site() as (origin, _, state):
@@ -99,6 +100,21 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.report['plan_review']['status'], 'revised_unreviewed')
             self.assertNotEqual(result.report['plan_review']['reviewed_plan_sha256'], result.report['plan_sha256'])
             self.assertIn('review_feedback', primary.calls[2]['context'])
+
+    async def test_host_navigation_query_is_not_sent_to_either_model(self):
+        with site() as (origin, _, _):
+            marker = 'private-query-state'
+            request = replace(self.request(origin), entry_url=origin + '/app/mixed?view=' + marker)
+            proposal = plan(request.entry_url)
+            proposal['plan']['steps'].pop(0)  # The host supplies the registered initial navigation.
+            primary = ScriptedModel([intake(), proposal, analysis()])
+            critic = ScriptedModel([review()])
+            result = await self.service(primary, origin, critic).run(request, reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced', result)
+            self.assertNotIn(marker, str(primary.calls))
+            self.assertNotIn(marker, str(critic.calls))
+            self.assertNotIn(marker, str(self.store.read_json(result.job_id, 'review_proposal.json')))
+            self.assertEqual(self.store.read_json(result.job_id, 'scenario.json')['plan']['steps'][0]['target'], request.entry_url)
 
     async def test_unnecessary_question_can_be_revised_but_real_question_stops(self):
         with site() as (origin, _, _):

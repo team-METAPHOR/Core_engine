@@ -119,6 +119,8 @@ PYTHONPATH=src python -m core_engine.evaluation --live --repeats 3 --retest-fixe
 
 [개선 전후 평가](docs/evaluation-improvement-2026-11-05.md)에는 동일 기준 재평가와 추가 8개 개발 사례의 결과, 남은 오류를 따로 기록합니다.
 
+[Groq 비판자 비교 평가](docs/evaluation-critic-2026-11-05.md)에서는 같은 개선 코드의 20개 개발 사례를 각 3회 실행했습니다. 비판자 없음은 52/60, Groq 사용은 57/60 통과했습니다. 잘못된 비판과 남은 실패, 추가 호출량, 독립 검사 복구 기록도 함께 공개합니다. 실제 고객사 전체의 정확도를 뜻하지는 않습니다.
+
 ## 백엔드 호출
 
 ```python
