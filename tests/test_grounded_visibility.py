@@ -161,6 +161,12 @@ class GroundedVisibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('replay_pages', revision)
         self.assertIn('delivery-dialog', revision)
         self.assertNotIn('matched_selectors', revision)
+        context = model.calls[2]['context']
+        final = {element['selector'] for element in context['page']['elements']}
+        self.assertTrue(context['replay_pages'])
+        for page in context['replay_pages']:  # only what vanished, so real pages stay under 128 KiB
+            self.assertTrue(page['elements'])
+            self.assertFalse(final & {element['selector'] for element in page['elements']})
 
     async def test_bug47_wrong_selector_on_every_revision_is_never_not_reproduced(self):
         with delivery_site(closes=False) as origin:
