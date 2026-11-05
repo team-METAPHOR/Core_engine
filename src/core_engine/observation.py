@@ -115,6 +115,7 @@ _ELEMENTS = """sensitive => {
             role: el.getAttribute('role') || '', name: (el.getAttribute('aria-label') || (el.labels?.[0] ? safeText(el.labels[0]) : '')).slice(0,120),
             text: /^(input|textarea|select)$/.test(el.localName) ? '' : safeText(el),
             enabled: !el.disabled, input_type: el.localName === 'input' ? el.type : '',
+            href: el.localName === 'a' && el.origin === location.origin ? el.pathname : '',
             state_attributes: Object.fromEntries(['aria-pressed','aria-checked','aria-expanded',
                 'aria-selected','aria-busy','aria-disabled'].map(key => [key, el.getAttribute(key)])
                 .filter(([key, value]) => ['true','false'].includes(value)
@@ -166,7 +167,7 @@ class Recorder:
             # Also mask credentials accidentally echoed by the authenticated application.
             masks.extend(page.get_by_text(secret, exact=False) for secret in self.options.login.secret_values())
         for item in elements:
-            for key in ("name", "text", "selector"):
+            for key in ("name", "text", "selector", "href"):
                 cleaned = self.options.redact(item[key])
                 if cleaned != item[key]:
                     masks.append(page.locator("css=" + item["selector"]))

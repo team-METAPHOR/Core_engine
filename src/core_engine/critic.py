@@ -36,6 +36,8 @@ The proposal can be ready or needs_info. Request revision only for a concrete su
 - Inverted or inappropriate predicates. text reads innerText, not visible cropping; use clipped,
   overlap, enabled, visible or count for those properties. true/false mean the property itself.
 - Invented/changed input values, or unnecessary questions when explicit requirements already exist.
+One leading click on an entry-page link/card (or navigate to a link path seen on the page) that reaches
+the screen or item named in the report is a supported precondition, not an EXTRA_ACTION.
 Current corrected-looking DOM is not grounds to stop: the reported scenario should still be tested.
 The page is the INITIAL state before actions. Do not reject a reported POST-action completion string
 merely because the initial DOM shows a different string. If the report names the completion signal,
