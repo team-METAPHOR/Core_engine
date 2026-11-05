@@ -18,6 +18,23 @@ STATE_ATTRIBUTES = {
 }
 
 
+# Text check values compared with the same element's text captured right before the final action,
+# for "should change but stays the same" reports whose absolute values depend on the reporter's session.
+RELATIVE_VALUES = frozenset({"$unchanged", "$changed"})
+
+
+def is_relative(check) -> bool:
+    return isinstance(check, Check) and check.kind == "text" and check.value.strip() in RELATIVE_VALUES
+
+
+async def text_value(page, selector):
+    """Stripped inner text of exactly one visible element, else None (never raises for absence)."""
+    locator = page.locator("css=" + selector)
+    if await locator.count() != 1 or not await locator.is_visible():
+        return None
+    return (await locator.inner_text()).strip()
+
+
 @dataclass(frozen=True)
 class Check:
     kind: str
@@ -53,8 +70,10 @@ class Check:
             raise ValueError("only overlap requires a secondary selector")
 
 
-async def observe_check(page, check, network=None) -> bool:
-    """Missing/ambiguous elements are blocked except explicit visibility/count checks."""
+async def observe_check(page, check, network=None, baseline=None) -> bool:
+    """Missing/ambiguous elements are blocked except explicit visibility/count checks.
+
+    `baseline` maps selectors to their text before the final action, for relative text checks."""
     if not isinstance(check, Check):
         # Legacy TextCheck keeps its visible-element semantics.
         check = Check("text", check.selector, check.text)
@@ -78,7 +97,13 @@ async def observe_check(page, check, network=None) -> bool:
     if count != 1 or not await locator.is_visible():
         raise PolicyError("CHECK_TARGET_UNAVAILABLE")
     if check.kind == "text":
-        return (await locator.inner_text()).strip() == check.value.strip()
+        actual = (await locator.inner_text()).strip()
+        if is_relative(check):
+            before = (baseline or {}).get(check.selector)
+            if before is None:
+                raise PolicyError("RELATIVE_BASELINE_UNAVAILABLE")
+            return (actual == before) == (check.value.strip() == "$unchanged")
+        return actual == check.value.strip()
     if check.kind == "attribute":
         actual = await locator.get_attribute(check.other_selector)
         if actual not in STATE_ATTRIBUTES[check.other_selector]:

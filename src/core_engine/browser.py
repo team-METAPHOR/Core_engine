@@ -13,7 +13,7 @@ from typing import Awaitable, Callable
 from uuid import uuid4
 
 from .budget import BudgetLimits, RequestBudget
-from .checks import Check, observe_check, wait_for_check
+from .checks import Check, is_relative, observe_check, text_value, wait_for_check
 from .observation import BrowserOptions, Recorder
 from .plan import BrowserPlan, TextCheck
 from .policy import PolicyError, RunPolicy
@@ -250,6 +250,9 @@ class BrowserRunner:
         completed, ready, observed, expected, blocker = 0, False, None, None, None
         snapshots, warnings = [], []
         completion_evidence, before_outcomes, completion_tracker = {}, None, None
+        baseline, relative_decided = {}, any(is_relative(check) for check in (plan.expected, plan.symptom))
+        compared = {check.selector for check in (plan.expected, plan.symptom)
+                    if isinstance(check, Check) and check.kind == "text"}
         started, stage, timeline = time.monotonic(), "environment", []
         responses = [(check.other_selector, check.selector, int(check.value))
                      for check in (plan.expected, plan.symptom) if isinstance(check, Check)
@@ -279,6 +282,11 @@ class BrowserRunner:
                         snapshot = await session.capture(ordinal, index, "before")
                         if snapshot:
                             snapshots.append(snapshot["id"])
+                        if index == len(plan.steps) - 1 and step.action not in {"navigate", "reload", "back"}:
+                            for selector in compared:
+                                before_text = await text_value(session.page, selector)
+                                if before_text is not None:
+                                    baseline[selector] = before_text
                         if index == len(plan.steps) - 1 and step.action not in {"navigate", "reload", "back"} and getattr(plan.ready, "kind", "text") in {"text", "attribute"}:
                             try:
                                 already_ready = await observe_check(session.page, plan.ready, session.network)
@@ -299,7 +307,7 @@ class BrowserRunner:
                                     return state;
                                 }""", attribute)
                                 try:
-                                    before_outcomes = (
+                                    before_outcomes = None if relative_decided else (
                                         await observe_check(session.page, plan.expected, session.network) if plan.expected else None,
                                         await observe_check(session.page, plan.symptom, session.network))
                                 except PolicyError:
@@ -327,11 +335,18 @@ class BrowserRunner:
                     try:
                         if isinstance(plan.symptom, TextCheck):
                             await session.page.locator("css=" + plan.symptom.selector).wait_for(state="visible")
-                        observed = await observe_check(session.page, plan.symptom, session.network)
+                        observed = await observe_check(session.page, plan.symptom, session.network, baseline)
                         if plan.expected is not None:
-                            expected = await observe_check(session.page, plan.expected, session.network)
+                            expected = await observe_check(session.page, plan.expected, session.network, baseline)
                             if observed == expected:
-                                raise PolicyError("ORACLE_AMBIGUOUS")
+                                changed_text = await _unchanged_fallback(session.page, plan, baseline) if not observed else None
+                                if changed_text is None:
+                                    raise PolicyError("ORACLE_AMBIGUOUS")
+                                # Neither literal value matched (values copied from the reporter's own
+                                # session differ after reset): the same element's text before and after
+                                # the final action decides a "should change but stays the same" report.
+                                observed, expected, relative_decided = not changed_text, changed_text, True
+                                warnings.append("RELATIVE_CHANGE_FALLBACK")
                     except (PolicyError, Error) as exc:
                         if not ready:
                             raise PolicyError("STEP_OR_READINESS_FAILED") from None
@@ -350,7 +365,7 @@ class BrowserRunner:
                         completion_evidence.update(new_requests_after_final_action=new_requests,
                                                    outcomes_changed_after_final_action=changed,
                                                    completion_signal_refreshed=refreshed)
-                        if completion_evidence["ready_before_final_action"] and not new_requests and not refreshed and changed is False:
+                        if completion_evidence["ready_before_final_action"] and not new_requests and not refreshed and changed is False and not relative_decided:
                             raise PolicyError("STALE_COMPLETION_SIGNAL")
                     mark("completed")
                 except PolicyError as exc:
@@ -386,3 +401,16 @@ class BrowserRunner:
                           state_changing_requests=tuple(session.state_changing_requests),
                           warnings=tuple(warnings))
         return AttemptResult(blocker is None, observed, (record.id,), blocker), record
+
+
+async def _unchanged_fallback(page, plan, baseline):
+    """True/False when the shared text target changed across the final action; None when not applicable."""
+    expected, symptom = plan.expected, plan.symptom
+    if not all(isinstance(check, Check) and check.kind == "text" for check in (expected, symptom)):
+        return None
+    if expected.selector != symptom.selector or is_relative(expected) or is_relative(symptom):
+        return None
+    before, after = baseline.get(symptom.selector), await text_value(page, symptom.selector)
+    if before is None or after is None:
+        return None
+    return before != after

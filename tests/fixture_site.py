@@ -36,6 +36,23 @@ def site(*, tls=False):
                 payload = (f'''<!doctype html><style>#a,#b {{ position:absolute;top:20px;width:100px;height:40px; }}
 #a {{left:10px}} #b {{left:{left}px}} #clip {{position:absolute;top:100px;left:0;width:20px;white-space:nowrap;overflow:hidden}}</style>
 <button id="a">First</button><button id="b">Second</button><div id="clip">overflowing content</div><div id="ready">done</div>''').encode()
+            elif self.path in {"/app/cart-qty", "/app/cart-qty-fixed"}:
+                # Every attempt starts from an empty cart; the defective + button is a no-op.
+                step = 1 if self.path.endswith("fixed") else 0
+                payload = f'''<!doctype html><meta charset="utf-8">
+<button id="add">담기</button><button id="inc">+</button>
+<div data-testid="cart-quantity">0</div><div id="status">대기</div>
+<script>const q = document.querySelector('[data-testid="cart-quantity"]');
+document.querySelector('#add').onclick = () => {{ q.textContent = '1'; }};
+document.querySelector('#inc').onclick = () => {{ q.textContent = String(Number(q.textContent) + {step});
+  document.querySelector('#status').textContent = '처리됨'; }};</script>'''.encode()
+            elif self.path in {"/app/toggle", "/app/toggle-fixed"}:
+                fixed = "true" if self.path.endswith("fixed") else "false"
+                payload = f'''<!doctype html><meta charset="utf-8">
+<button id="toggle">전환</button><span id="mode">라이트</span><div id="status">대기</div>
+<script>document.querySelector('#toggle').onclick = () => {{
+  if ({fixed}) document.querySelector('#mode').textContent = '다크';
+  document.querySelector('#status').textContent = '처리됨'; }};</script>'''.encode()
             elif self.path == "/app/shop":
                 # Entry page: product cards only; the add-to-cart button lives on the detail page.
                 payload = '''<!doctype html><meta charset="utf-8"><h1>BugLab 쇼핑</h1>
