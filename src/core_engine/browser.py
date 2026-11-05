@@ -100,7 +100,7 @@ class BrowserRunner:
                                 login_url=(self.policy.base_url.rstrip('/') + (self.options.login.submit_path or self.options.login.login_path))
                                 if self.options.login else None)
 
-    async def inspect(self, url: str, *, reset, is_authorized, cancelled=None, budget=None, steps=()) -> dict | None:
+    async def inspect(self, url: str, *, reset, is_authorized, cancelled=None, budget=None, steps=(), probe=()) -> dict | None:
         """Fresh observation for planning; reset(0) is the discovery pass.
 
         With `steps` (an already validated, scope-checked replay), they run after the entry navigation
@@ -139,6 +139,18 @@ class BrowserRunner:
                                 except (PolicyError, Error, AssertionError):
                                     return None
                             result = await session.capture(0, len(steps), "replayed" if steps else "discovery")
+                            if result is not None and probe:
+                                # Check selectors (often container divs not listed in elements) that
+                                # resolve to exactly one visible element on this screen.
+                                resolved = []
+                                for selector in dict.fromkeys(probe):
+                                    try:
+                                        locator = session.page.locator("css=" + selector)
+                                        if await locator.count() == 1 and await locator.is_visible():
+                                            resolved.append(selector)
+                                    except Error:
+                                        pass
+                                result = {**result, "resolved_selectors": resolved}
                             session.check()
                             return result
                     finally:

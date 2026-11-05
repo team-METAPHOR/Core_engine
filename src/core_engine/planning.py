@@ -65,6 +65,7 @@ def check_error(plan, page, *, require_present):
     `require_present` applies to the page the checks were written for (the screen after replay);
     otherwise only guessed positional selectors (tags/nth-of-type only) are rejected."""
     selectors = {_canon(element["selector"]) for element in (page or {}).get("elements", [])}
+    selectors |= {_canon(selector) for selector in (page or {}).get("resolved_selectors", [])}
     for key in ("ready", "expected", "symptom"):
         check = getattr(plan, key)
         if check is None or getattr(check, "kind", "text") != "text":

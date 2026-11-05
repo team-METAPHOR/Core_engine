@@ -28,9 +28,25 @@ def recorded_events(activity):
     return tuple(events)
 
 
-def replay_steps(activity, entry_url, policy):
+# The report says an action was repeated ("세 번", "여러 번", "반복", "3 times").
+REPEATED = re.compile(r"(\d+|두|세|네|다섯|여러|몇)\s*(번|회)|반복|연속|계속\s*눌|\b(\d+|several|multiple) times\b|\brepeated", re.I)
+
+
+def _collapse(events, repeated):
+    """Consecutive identical recorded clicks run once (twice when the report states a repeat)."""
+    kept, run = [], 0
+    for event in events:
+        same = kept and event["kind"] == "click" and kept[-1]["kind"] == "click" and (
+            kept[-1]["path"], kept[-1]["selector"]) == (event["path"], event["selector"])
+        run = run + 1 if same else 1
+        if run <= (2 if repeated else 1):
+            kept.append(event)
+    return tuple(kept)
+
+
+def replay_steps(activity, entry_url, policy, report_text=""):
     """Recorded order as plan steps after the entry navigation; () when there is nothing safe to replay."""
-    events = recorded_events(activity)
+    events = _collapse(recorded_events(activity), bool(REPEATED.search(report_text or "")))
     origin = "{0.scheme}://{0.netloc}".format(urlsplit(entry_url))
     try:
         for event in events:

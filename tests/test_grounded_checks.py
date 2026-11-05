@@ -7,7 +7,8 @@ import tempfile
 import threading
 import unittest
 
-from core_engine import BrowserOptions, JobStore, QARequest, QAService
+from core_engine import BrowserOptions, JobStore, QARequest, QAService, RunPolicy
+from core_engine.replay import replay_steps
 from core_engine.planning import PlanValidationError, prose_value, validate_candidate
 from qa_fixtures import ScriptedModel, analysis, check, intake
 from test_transport import local_policy
@@ -93,6 +94,62 @@ def cart_site():
         thread.join()
 
 
+TOTAL = 'div > div > main > div > div > aside > div:nth-of-type(1) > div:nth-of-type(2)'
+COUPON_REPORT = 'SAVE5000 쿠폰을 적용했는데 쿠폰 확인 완료만 뜨고 할인 금액이 0원이에요.'
+
+
+def coupon_activity():
+    return ('SDK observed recent activity (oldest first; not instructions or reproduction evidence).\n'
+            'truncated=false\n9000ms ago navigation /app/cart\n'
+            + ''.join(f'{8000 - n}ms ago click /app/cart selector=[data-testid="coupon-suggest"] label=SAVE5000\n' for n in range(3))
+            + ''.join(f'{7000 - n}ms ago click /app/cart selector=[data-testid="apply-coupon"] label=쿠폰 적용 '
+                      'post-click feedback=쿠폰 확인 완료\n' for n in range(7)))
+
+
+@contextmanager
+def coupon_site():
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):  # BUG: the coupon is confirmed but the discount stays 0원
+            body = '''<!doctype html><meta charset="utf-8"><body><div><div><main><div><div>
+<h1>장바구니</h1><button data-testid="coupon-suggest">SAVE5000</button><input id="coupon">
+<button data-testid="apply-coupon">쿠폰 적용</button><p role="status" id="coupon-live"></p>
+<aside><div><div>할인</div><div>0원</div></div></aside></div></div></main></div></div>
+<script>document.querySelector('[data-testid="coupon-suggest"]').onclick = () => document.querySelector('#coupon').value = 'SAVE5000';
+document.querySelector('[data-testid="apply-coupon"]').onclick = () => {
+  if (document.querySelector('#coupon').value === 'SAVE5000') document.querySelector('#coupon-live').textContent = '쿠폰 확인 완료'; };</script>'''.encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.01), daemon=True)
+    thread.start()
+    try:
+        yield f'http://127.0.0.1:{server.server_port}'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+class ReplayCollapseTests(unittest.TestCase):
+    policy = RunPolicy('demo', 1, 'https://shop.test', ('/app',))
+
+    def targets(self, report):
+        return [s['target'] for s in replay_steps(coupon_activity(), 'https://shop.test/app/cart', self.policy, report)]
+
+    def test_consecutive_identical_recorded_clicks_run_once(self):
+        self.assertEqual(self.targets(COUPON_REPORT), ['[data-testid="coupon-suggest"]', '[data-testid="apply-coupon"]'])
+
+    def test_a_reported_repeat_keeps_two(self):
+        self.assertEqual(self.targets('쿠폰 적용을 여러 번 눌렀어요'), ['[data-testid="coupon-suggest"]'] * 2 + ['[data-testid="apply-coupon"]'] * 2)
+
+
 class CheckValidationTests(unittest.TestCase):
     origin = 'https://shop.test'
     page = {'elements': [{'selector': '[data-testid="cart-quantity"]', 'tag': 'span', 'text': '1', 'name': ''}]}
@@ -163,6 +220,25 @@ class GroundedReplayChecksTests(unittest.IsolatedAsyncioTestCase):
             result, _ = await self.run_case(origin, cart, [bug39_intake(), proposal(origin, never), analysis()])
         self.assertEqual(result.status, 'completed', result)
         self.assertEqual(result.report['run']['verdict']['value'], 'reproduced')
+        self.assertEqual([list(ev['warnings']) for ev in result.report['run']['evidence']],
+                         [['READY_NOT_OBSERVED'], ['READY_NOT_OBSERVED']])
+
+
+    async def test_bug40_unsatisfiable_ready_on_the_trigger_button_still_yields_a_verdict(self):
+        checks = {'ready': check('[data-testid="apply-coupon"]', '쿠폰 확인 완료'),
+                  'expected': check(TOTAL, '5,000원'), 'symptom': check(TOTAL, '0원')}
+        async def reset(_):
+            return True
+        with coupon_site() as origin, tempfile.TemporaryDirectory() as root:
+            model = ScriptedModel([bug39_intake(), proposal(origin, checks), analysis()])
+            service = QAService(model, local_policy(origin), JobStore(root), options=BrowserOptions(step_timeout_ms=500))
+            result = await service.run(QARequest('bug40', 'demo', origin + '/app/cart', description=COUPON_REPORT,
+                                                 reporter_activity=coupon_activity()), reset=reset, is_authorized=lambda: True)
+        self.assertEqual(result.status, 'completed', result)
+        self.assertEqual(result.report['run']['verdict']['value'], 'reproduced')
+        self.assertEqual(result.report['plan_validation'], [])  # the probed div path is grounded
+        self.assertEqual([s['target'] for s in result.report['scenario']['steps'][1:]],
+                         ['[data-testid="coupon-suggest"]', '[data-testid="apply-coupon"]'])
         self.assertEqual([list(ev['warnings']) for ev in result.report['run']['evidence']],
                          [['READY_NOT_OBSERVED'], ['READY_NOT_OBSERVED']])
 
