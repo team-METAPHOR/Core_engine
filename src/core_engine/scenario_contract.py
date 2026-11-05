@@ -1,6 +1,8 @@
 """Ground reported requirements before planning; revisions cannot silently replace them."""
 
 import copy
+from urllib.parse import urlsplit
+from .policy import canonical_url
 
 
 def ground_contract(intake, report):
@@ -14,8 +16,17 @@ def ground_contract(intake, report):
         value = item.get("value", "")
         if value and value not in quote:
             raise ValueError("scenario requirement value is not grounded in its quote")
-        if item.get("action") != "fill" and "action" in item and value:
-            raise ValueError("only fill requirements carry input values")
+        if item.get("action") == "click" and value:
+            raise ValueError("click requirements do not carry input values")
+        if item.get("action") == "navigate":
+            target = "https://scope.invalid" + value if value.startswith("/") and not value.startswith("//") else value
+            try:
+                canonical_url(target)
+                valid = True
+            except ValueError:
+                valid = False
+            if not valid or not value:
+                raise ValueError("navigation needs an exact quoted URL or path")
     return {"required_actions": actions, "actions_complete": intake.get("actions_complete", False),
             "completion_signal": signal}
 
@@ -61,7 +72,12 @@ def contract_error(plan, contract):
     for step in actual:
         if cursor < len(required):
             item = required[cursor]
-            if step.action == item["action"] and (step.action != "fill" or step.value == item["value"]):
+            same_value = step.action != "fill" or step.value == item["value"]
+            if step.action == "navigate" and item["action"] == "navigate":
+                parts = urlsplit(step.target)
+                expected_url = parts.scheme + "://" + parts.netloc + item["value"] if item["value"].startswith("/") else item["value"]
+                same_value = canonical_url(step.target) == canonical_url(expected_url)
+            if step.action == item["action"] and same_value:
                 cursor += 1
     if cursor != len(required) or (contract["actions_complete"] and len(actual) != len(required)):
         return "PLAN_REPORTED_SEQUENCE_CHANGED", "steps"

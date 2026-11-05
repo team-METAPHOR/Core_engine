@@ -18,8 +18,11 @@ INTAKE_SCHEMA = _object(
     expected_behavior=optional_text(), expectation_source=_enum("report", "image_inferred", "unknown"),
     symptom_description=_text(), reproduction_steps=_array(_text(800), 10),
     preconditions=_array(_text(800), 6), questions=_array(_text(800), 5),
-    required_actions=_array(_object(action=_enum("click", "fill", "navigate"),
-        value=optional_text(2000), source_quote=_text(800)), 18),
+    required_actions=_array({"anyOf": [
+        _object(action=_enum("click"), value=_enum(""), source_quote=_text(800)),
+        _object(action=_enum("fill"), value=optional_text(2000), source_quote=_text(800)),
+        _object(action=_enum("navigate"), value=_text(2000), source_quote=_text(800)),
+    ]}, 18),
     actions_complete={"type": "boolean"},
     completion_signal={"anyOf": [_object(value=_text(300), source_quote=_text(800)), {"type": "null"}]},
 )
@@ -134,6 +137,10 @@ indicator independent of normal/buggy outcomes, not the expected result, an inpu
 Never derive a completion signal or action quote from the screenshot, guesses, or another model.
 The host opens the registered entry page before reported actions. Do not include this initial page
 opening in required_actions; include navigate only for an explicitly reported LATER navigation.
+For navigate, value MUST be the exact destination URL or /path written in the source_quote. Without
+an explicit destination, do not invent a navigate requirement. Reading/checking/confirming a result,
+counting elements, or waiting for a completion message are OBSERVATIONS, not browser actions:
+never encode these as navigate or click. The host handles observations via ready/expected/symptom.
 """
 PLAN_PROMPT = DATA_RULES + """
 Build one bounded, deterministic browser test from the interpreted report and current page snapshot.

@@ -62,3 +62,24 @@ class ScenarioContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_output(draft, schema)
         self.assertEqual(PLAN_SCHEMA, base)
+
+    def test_observation_cannot_be_grounded_as_navigation_without_destination(self):
+        altered = copy.deepcopy(self.intake)
+        altered['required_actions'].append({'action': 'navigate', 'value': '', 'source_quote': 'done 표시 후 확인'})
+        with self.assertRaises(ValueError):
+            ground_contract(altered, self.report)
+        altered['required_actions'][-1]['value'] = 'done'
+        with self.assertRaises(ValueError):
+            ground_contract(altered, self.report)
+
+    def test_explicit_later_navigation_preserves_quoted_destination(self):
+        self.report['description'] += ' 이후 /app/details로 이동합니다.'
+        self.intake['required_actions'].append({'action': 'navigate', 'value': '/app/details',
+                                                'source_quote': '/app/details로 이동합니다.'})
+        self.contract = ground_contract(self.intake, self.report)
+        data = plan(self.url)['plan']
+        data['steps'].append({'action': 'navigate', 'target': 'https://example.test/app/details', 'value': ''})
+        self.validate(data)
+        data['steps'][-1]['target'] = 'https://example.test/app/elsewhere'
+        with self.assertRaises(PlanValidationError):
+            self.validate(data)
