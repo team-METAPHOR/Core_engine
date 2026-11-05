@@ -21,7 +21,7 @@ from .images import Screenshot
 from .model import ModelError, strict_json
 from .observation import BrowserOptions, Recorder
 from .plan import Step
-from .planning import PlanValidationError, validate_candidate
+from .planning import PlanValidationError, check_error, grounded_fallback, validate_candidate
 from .policy import PolicyError, RunPolicy, canonical_url
 from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PROMPT, PLAN_PROMPT,
                         PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, plain_questions, repair_schema)
@@ -393,12 +393,12 @@ class QAService:
                                     candidate = validate_candidate(compose(generated["plan"], recorded, request.entry_url),
                                         request.text(), entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms,
                                         contract=replay_contract(recorded, contract), targets=snapshot,
-                                        allow_text_targets=proposal == self.limits.max_plan_revisions)
+                                        allow_text_targets=proposal == self.limits.max_plan_revisions, checks=False)
                                     self._validate_plan(candidate)
                                     try:  # the model's own plan is the runtime fallback when a recorded target is gone
                                         fallback_plan = validate_candidate(generated["plan"], request.text(),
                                             entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract,
-                                            targets=snapshot, allow_text_targets=True)
+                                            targets=snapshot, allow_text_targets=True, checks=False)
                                         self._validate_plan(fallback_plan)
                                     except (PlanValidationError, ValueError):
                                         fallback_plan = None
@@ -465,6 +465,52 @@ class QAService:
                                 plan_review["status"] = "accepted_ignoring_unanchored_review"
                             plan_review["final_plan_sha256"] = plan_digest(plan)
                         break
+                    if recorded and plan is not None:
+                        # The checks were written from the entry page (often an empty cart after reset),
+                        # which never shows the replayed result. Replay once and ground them on that screen.
+                        event("discovering", {"replay": True})
+                        final = await runner.inspect(request.entry_url, steps=plan.steps[1:], reset=reset,
+                            is_authorized=is_authorized, cancelled=cancelled, budget=budget)
+                        guard()
+                        while final is not None:
+                            try:
+                                check_error(plan, final, require_present=True)
+                                break
+                            except PlanValidationError as exc:
+                                diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field, "page": "replayed"}
+                                plan_validation.append(diagnostic)
+                                event("plan_rejected", diagnostic)
+                                feedback = {**diagnostic, "message": exc.feedback}
+                            if proposal >= self.limits.max_plan_revisions:
+                                grounded = grounded_fallback(plan, final, snapshot, request.text())
+                                if grounded is not None:
+                                    repairs.append({"kind": "grounded_checks", "from_plan": plan_digest(plan),
+                                                    "to_plan": plan_digest(grounded), "observation_id": final["id"]})
+                                    plan = grounded
+                                break
+                            proposal += 1
+                            images = (recorder.image(final),)
+                            context = {**context, "page": final, "image_order": ["page_after_replay"],
+                                       "validation_feedback": feedback, "rejected_plan": encode_plan(plan),
+                                       "previous_questions": []}
+                            generated = await calls.invoke("plan_revision", PLAN_REVISION_PROMPT, context, proposal_schema, images)
+                            if generated["status"] != "ready" or generated["plan"] is None or generated["questions"]:
+                                continue
+                            generated = {**generated, "plan": flatten_draft(generated["plan"], entry_url=redact_text(request.entry_url))}
+                            try:
+                                revised = validate_candidate(compose(generated["plan"], recorded, request.entry_url),
+                                    request.text(), entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms,
+                                    contract=replay_contract(recorded, contract), targets=final,
+                                    allow_text_targets=True, checks=False)
+                                self._validate_plan(revised)
+                            except PlanValidationError as exc:
+                                diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field, "page": "replayed"}
+                                plan_validation.append(diagnostic)
+                                event("plan_rejected", diagnostic)
+                                continue
+                            plan = revised
+                        if fallback_plan is not None:
+                            fallback_plan = replace(fallback_plan, ready=plan.ready, expected=plan.expected, symptom=plan.symptom)
                 for revision in range(self.limits.max_repairs + 1):
                     guard()
                     recorder.revision = revision

@@ -173,3 +173,7 @@ verified = await service.retest(
 주요 코드: `MODEL_CALL_LIMIT`, `MODEL_TOKEN_LIMIT`, `QA_RUNTIME_LIMIT`, `CANCELLED`, `AUTHORIZATION_REVOKED`, `RESET_FAILED`, `STEP_OR_READINESS_FAILED`, `CHECK_TARGET_UNAVAILABLE`, `AMBIGUOUS_CHECK_TARGET`, `ORACLE_AMBIGUOUS`, `EVIDENCE_CAPTURE_FAILED`, `INVALID_PLAN_OR_BASELINE`, `QA_EXECUTION_FAILED`. 공급자 오류 코드는 [분석 API v2](ai-analysis.md)에 정리했습니다.
 
 잘못된 초기 입력·설정·프로그램 ID·시작 전 승인 실패는 예외로 거절하며 모델을 호출하지 않습니다. 실행 중 실패는 가능한 한 저장된 결과와 오류 코드로 반환합니다. 저장소 자체가 실패한 경우 호출자는 파일 I/O 예외를 처리해야 합니다. 호출 태스크를 취소하면 취소 결과를 기록한 뒤 `CancelledError`를 다시 전달합니다.
+
+## 기록 재생 후 판정 조건 (0.8.4)
+
+`reporter_activity`를 재생하는 경로에서는 시작 화면(초기화 후 빈 장바구니 등)만 보고 쓴 판정 조건이 최종 화면에 없을 수 있습니다. 계획을 받은 뒤 기록된 단계를 한 번 재생해 최종 화면을 관찰하고, 텍스트 조건의 선택자가 그 화면 요소에 없거나 값이 문장형이면(`PLAN_UNGROUNDED_CHECK`, `PLAN_PROSE_CHECK_VALUE`) 같은 계획 재작성 예산으로 최종 화면 기준 조건을 다시 받습니다. 예산이 끝나면 신고 문장에 있는 짧은 텍스트 중 최종 화면에 새로 나타난 요소로 증상 조건을 만들고, 관찰할 수 없는 기대 조건은 비웁니다. 모든 단계를 마쳤고 기대·증상 조건이 함께 있으면 완료 신호를 못 봐도 막지 않고 `READY_NOT_OBSERVED` 경고를 남긴 뒤 판정합니다.

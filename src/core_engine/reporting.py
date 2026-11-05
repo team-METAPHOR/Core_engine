@@ -83,7 +83,8 @@ def render_report(report: dict) -> str:
             action = {'navigate': '페이지 이동', 'reload': '새로고침', 'back': '뒤로 가기', 'fill': '입력', 'click': '클릭', 'assert_text': '텍스트 확인'}[step['action']]
             lines.append(f'{i}. ' + escape(f"{action} · {step['target']}" + (f" · {step['value']}" if step['value'] else '')))
         for label, key in [('완료 확인', 'ready'), ('기대 결과', 'expected'), ('증상 확인', 'symptom')]:
-            lines += ['', f'**{label}:** ' + escape(describe_check(report['scenario'][key]))]
+            if report['scenario'].get(key) is not None:
+                lines += ['', f'**{label}:** ' + escape(describe_check(report['scenario'][key]))]
     if run:
         lines += ['', '## 시도별 관찰', '']
         for item in run['evidence']:

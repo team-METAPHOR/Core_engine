@@ -4,6 +4,7 @@ import re
 from dataclasses import replace
 from urllib.parse import urlsplit
 
+from .checks import Check
 from .qa_schema import decode_plan
 from .scenario_contract import contract_error
 
@@ -24,6 +25,8 @@ FEEDBACK = {
     "PLAN_UNSUPPORTED_RESPONSE_CHECK": "A response_status path/status must be explicitly supplied in the report/test_data; do not invent an endpoint or HTTP result.",
     "PLAN_SCREEN_NOT_REACHED": "The report acts on another screen, but the first interaction target is not on the entry page. Before it, add ONE click on the visible link/card for that screen/item from page.elements, or navigate to an in-scope href listed in page.elements. When page.elements shows no way there, navigate to the site root \"/\" and click the link/card whose text matches the named item.",
     "PLAN_TEXT_TARGET": "A click/fill target or check selector is plain visible text, not a CSS selector. Use the exact selector of the matching element from page.elements (match its text or name), or a CSS selector built from attributes such as [data-testid=...], [aria-label=...] or #id.",
+    "PLAN_PROSE_CHECK_VALUE": "A text check value is a descriptive sentence, not text the page shows. Use the short exact inner text (at most 40 characters) of ONE observed element, e.g. the quantity number or the price, never a summary such as \"수량이 증가하고 합계도 변경됨\".",
+    "PLAN_UNGROUNDED_CHECK": "A text check selector does not match any element in the supplied page.elements. Copy the exact selector of the observed element that shows the value (prefer [data-testid=...] or #id), do not guess positional div > div paths.",
     "PLAN_UNREPORTED_REPEAT": "Do not duplicate the final trigger in both setup_steps and final_action. Consecutive identical interactions require explicitly repeated required_actions from the report.",
 }
 
@@ -36,6 +39,73 @@ _CUSTOM_TAG = re.compile(r"^[a-z][a-z0-9]*-[a-z0-9-]*$")
 # Generic role words a model appends to visible text ("수량 늘리기 버튼", "수량 표시").
 _ROLE_WORDS = frozenset("버튼 링크 표시 텍스트 입력란 입력창 필드 영역 아이콘 탭 button link field text label icon".split())
 _CHECK_KINDS = {"text", "visible", "enabled", "clipped", "overlap", "count", "attribute"}
+
+
+# A clause connector or a descriptive ending ("증가하고 ", "변하지 않고", "...변경됨") marks a sentence, not UI text.
+_PROSE = re.compile(r"(하고|되고|않고|지고|면서|지만|는데)\s|변하지\s*않|그대로\s*(유지|있)")
+_PROSE_END = re.compile(r"(됨|함|않음|된다|한다|않는다|보임)[.!]?$")
+_STRUCTURAL = re.compile(r"^[a-z0-9\s>+~():-]+$")
+MAX_CHECK_TEXT = 40
+
+
+def prose_value(value):
+    """True for a summary sentence written as an exact-text check value; no page shows it verbatim."""
+    text = " ".join((value or "").split())
+    return len(text) > MAX_CHECK_TEXT or bool(_PROSE.search(text)) or (
+        len(text.split()) >= 3 and bool(_PROSE_END.search(text)))
+
+
+def _canon(selector):
+    return re.sub(r"\s*=\s*", "=", (selector or "").replace("'", '"')).strip()
+
+
+def check_error(plan, page, *, require_present):
+    """Raise when a text check cannot be observed: prose value, or a selector absent from `page`.
+
+    `require_present` applies to the page the checks were written for (the screen after replay);
+    otherwise only guessed positional selectors (tags/nth-of-type only) are rejected."""
+    selectors = {_canon(element["selector"]) for element in (page or {}).get("elements", [])}
+    for key in ("ready", "expected", "symptom"):
+        check = getattr(plan, key)
+        if check is None or getattr(check, "kind", "text") != "text":
+            continue
+        if prose_value(check.value):
+            raise PlanValidationError("PLAN_PROSE_CHECK_VALUE", f"{key}.value")
+        if page is not None and _canon(check.selector) not in selectors and (
+                require_present or _STRUCTURAL.match(check.selector.strip())):
+            raise PlanValidationError("PLAN_UNGROUNDED_CHECK", f"{key}.selector")
+
+
+def grounded_fallback(plan, final, entry, report):
+    """Last revision: observe one short element text after the replay that the report itself states.
+
+    Only elements new or changed since the entry page qualify; the model's own checks are kept when
+    observable. Returns None when nothing on the final page is grounded in the report."""
+    def usable(check):
+        if check is None:
+            return False
+        try:
+            check_error(replace(plan, ready=check, expected=None, symptom=check), final, require_present=True)
+        except PlanValidationError:
+            return False
+        return True
+    stated = _norm(" ".join(report.values()))
+    before = {(element["selector"], _norm(element.get("text"))) for element in (entry or {}).get("elements", [])}
+    candidates = [element for element in final.get("elements", [])
+                  if element.get("tag") not in {"a", "button", "input", "textarea", "select", "label", "option"}
+                  and 0 < len(_norm(element.get("text"))) <= MAX_CHECK_TEXT and _norm(element.get("text")) in stated
+                  and (element["selector"], _norm(element.get("text"))) not in before]
+    symptom = plan.symptom if usable(plan.symptom) else None
+    if symptom is None:
+        if not candidates:
+            return None
+        best = max(candidates, key=lambda e: (e["selector"].startswith(("[data-testid", "#")), len(_norm(e["text"]))))
+        symptom = Check("text", best["selector"], " ".join(best["text"].split()))
+    expected = plan.expected if usable(plan.expected) and plan.expected != symptom else None
+    ready = plan.ready if usable(plan.ready) and plan.ready not in (symptom, expected) else None
+    if ready is None:
+        ready = Check("visible", symptom.selector, "true") if symptom.kind == "text" else plan.ready
+    return replace(plan, ready=ready, expected=expected, symptom=symptom)
 
 
 def plain_text_target(target):
@@ -144,7 +214,7 @@ def _reaches_screen(plan, report, entry_url, page):
 
 
 def validate_candidate(data, report, *, entry_url, timeout_ms, contract=None, page=None, targets=None,
-                       allow_text_targets=False):
+                       allow_text_targets=False, checks=True):
     """Validate a proposal before any reproduction action; never rewrite its intended outcome.
 
     `page` is the discovery snapshot; with it, an action on another reported screen must first reach
@@ -162,6 +232,9 @@ def validate_candidate(data, report, *, entry_url, timeout_ms, contract=None, pa
     violation = contract_error(_reaches_screen(plan, report, entry_url, page), contract, report)
     if violation:
         raise PlanValidationError(*violation)
+    if checks and not allow_text_targets:
+        # The last proposal runs as-is; readiness/outcome observation still decides.
+        check_error(plan, targets, require_present=False)
     supplied = tuple(report.values())
     for key in ("ready", "expected", "symptom"):
         check = getattr(plan, key)
