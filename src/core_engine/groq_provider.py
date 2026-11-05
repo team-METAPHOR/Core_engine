@@ -55,7 +55,7 @@ class GroqModel:
             response = connection.getresponse()
             if response.status != 200:
                 raise ModelError({401: "MODEL_AUTH_FAILED", 403: "MODEL_AUTH_FAILED",
-                                  429: "MODEL_RATE_LIMITED"}.get(response.status, "MODEL_HTTP_ERROR"),
+                                  413: "MODEL_REQUEST_TOO_LARGE", 429: "MODEL_RATE_LIMITED"}.get(response.status, "MODEL_HTTP_ERROR"),
                                  retry_after_seconds=retry_after_seconds(response.getheader("retry-after")))
             data = response.read(1024 * 1024 + 1)
             if len(data) > 1024 * 1024:

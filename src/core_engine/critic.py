@@ -73,9 +73,16 @@ Never output a replacement plan, code, browser actions, bug verdict or advice to
 """
 
 
+# Layout numbers the critic never needs; dropping them keeps a review of a busy page under small
+# provider token limits (a BugLab cart review went from 9,779 tokens, HTTP 413, to an accepted size).
+CRITIC_DROPPED_ELEMENT_FIELDS = frozenset({"bounds", "client_size", "scroll_size"})
+
+
 def review_context(report, snapshot, proposal, validation, environment=None):
     # No image bytes, artifact paths, network logs, hidden answers or source code go to the critic.
-    return {"report": report, "page": {"url": snapshot["url"], "elements": snapshot["elements"]},
+    elements = [{key: value for key, value in element.items() if key not in CRITIC_DROPPED_ELEMENT_FIELDS}
+                for element in snapshot["elements"]]
+    return {"report": report, "page": {"url": snapshot["url"], "elements": elements},
             "proposal": {key: proposal[key] for key in ("status", "questions", "plan")}, "validation": validation,
             "environment": {key: value for key, value in (environment or {}).items() if key in {
                 "width", "height", "browser_name", "browser_version", "test_context_id", "session_mode",

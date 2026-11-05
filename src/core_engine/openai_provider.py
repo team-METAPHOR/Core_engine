@@ -65,7 +65,8 @@ class OpenAIModel:
             })
             response = connection.getresponse()
             if response.status != 200:
-                code = {401: "MODEL_AUTH_FAILED", 403: "MODEL_AUTH_FAILED", 429: "MODEL_RATE_LIMITED"}.get(
+                code = {401: "MODEL_AUTH_FAILED", 403: "MODEL_AUTH_FAILED", 413: "MODEL_REQUEST_TOO_LARGE",
+                        429: "MODEL_RATE_LIMITED"}.get(
                     response.status, "MODEL_HTTP_ERROR",
                 )
                 raise ModelError(code)
