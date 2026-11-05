@@ -58,6 +58,9 @@ an assert_text away from the last position; remove the redundant assertion and u
 Output assessment with one branch: accept has decision+summary only; revise adds 1..5 issues;
 needs_info adds 1..3 questions. No issues/questions in the accept branch.
 Each issue must cite supplied source_refs and name the specific mismatch, briefly in Korean.
+Action/readiness/outcome changes require report evidence. Merely citing proposal is not evidence that
+a reported operation is unnecessary. A search/submit button can be the required trigger between fills;
+never remove it solely because text was already entered or because final observations happen later.
 You receive sanitized text/DOM only, not screenshots; never claim to have inspected image pixels.
 Never output a replacement plan, code, browser actions, bug verdict or advice to bypass host checks.
 """
@@ -74,3 +77,17 @@ def normalize_review(response):
     item = response["assessment"]
     return {"decision": item["decision"], "summary": item["summary"],
             "issues": item.get("issues", []), "questions": item.get("questions", [])}
+
+
+def supported_revision(review):
+    """A proposal-only objection cannot justify changing an otherwise valid reported scenario."""
+    if review["decision"] != "revise":
+        return review, []
+    kept, ignored = [], []
+    for issue in review["issues"]:
+        sources = set(issue["source_refs"])
+        supported = 'report' in sources or (issue['code'] == 'CONTRACT_ERROR' and 'validation' in sources)
+        if issue['code'] == 'UNNECESSARY_QUESTION' and 'page' in sources:
+            supported = True
+        (kept if supported else ignored).append(issue)
+    return {**review, 'decision': 'revise' if kept else 'accept', 'issues': kept}, ignored

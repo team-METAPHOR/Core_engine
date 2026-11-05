@@ -19,6 +19,7 @@ INTAKE_SCHEMA = _object(
     symptom_description=_text(), reproduction_steps=_array(_text(800), 10),
     preconditions=_array(_text(800), 6), questions=_array(_text(800), 5),
     required_actions=_array({"anyOf": [
+        _object(action=_enum("observe"), value=_enum(""), source_quote=_text(800)),
         _object(action=_enum("click"), value=_enum(""), source_quote=_text(800)),
         _object(action=_enum("fill"), value=optional_text(2000), source_quote=_text(800)),
         _object(action=_enum("navigate"), value=_text(2000), source_quote=_text(800)),
@@ -124,8 +125,10 @@ test_data. A vague claim that some unknown query/account/item should work is ins
 the missing input and its known expected outcome before testing. Never replace missing facts with
 plausible example data. Preserve supplied literal values, including spelling and punctuation.
 Extract required_actions from the original report, in order, with exact source_quote substrings from
-the supplied report fields. Use fill.value only for a literal included in that quote; click/navigate
-value is empty. Omit the host-provided initial page navigation. Include a later navigate/reload only
+the supplied report fields. Classify reading/checking/waiting as observe, not as an interaction.
+Use fill.value only for a literal included in that quote; click/observe value is empty. For navigate,
+value is the exact reported destination URL or /path. Omit the host-provided initial page navigation.
+Include a later navigate/reload only
 when explicitly reported. Do not invent implicit clicks: a report saying 'search A then B' does not
 necessarily specify how submission happens. Set actions_complete=true only when the exact full UI
 action sequence is explicit, or a static observation needs no interaction; otherwise false. Preserve
@@ -139,8 +142,9 @@ The host opens the registered entry page before reported actions. Do not include
 opening in required_actions; include navigate only for an explicitly reported LATER navigation.
 For navigate, value MUST be the exact destination URL or /path written in the source_quote. Without
 an explicit destination, do not invent a navigate requirement. Reading/checking/confirming a result,
-counting elements, or waiting for a completion message are OBSERVATIONS, not browser actions:
-never encode these as navigate or click. The host handles observations via ready/expected/symptom.
+counting elements, or waiting for a completion message are OBSERVATIONS: classify these as observe,
+never navigate or click. The host separates observations from executable required actions and handles
+them via ready/expected/symptom. Clicking a named Confirm button is different from inspecting a result.
 """
 PLAN_PROMPT = DATA_RULES + """
 Build one bounded, deterministic browser test from the interpreted report and current page snapshot.

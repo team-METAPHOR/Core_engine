@@ -16,8 +16,8 @@ def ground_contract(intake, report):
         value = item.get("value", "")
         if value and value not in quote:
             raise ValueError("scenario requirement value is not grounded in its quote")
-        if item.get("action") == "click" and value:
-            raise ValueError("click requirements do not carry input values")
+        if item.get("action") in {"click", "observe"} and value:
+            raise ValueError("click/observation requirements do not carry input values")
         if item.get("action") == "navigate":
             target = "https://scope.invalid" + value if value.startswith("/") and not value.startswith("//") else value
             try:
@@ -27,7 +27,9 @@ def ground_contract(intake, report):
                 valid = False
             if not valid or not value:
                 raise ValueError("navigation needs an exact quoted URL or path")
-    return {"required_actions": actions, "actions_complete": intake.get("actions_complete", False),
+    return {"required_actions": [item for item in actions if item["action"] != "observe"],
+            "reported_observations": [item["source_quote"] for item in actions if item["action"] == "observe"],
+            "actions_complete": intake.get("actions_complete", False),
             "completion_signal": signal}
 
 

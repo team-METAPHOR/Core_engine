@@ -16,7 +16,7 @@ from .analysis_schema import analysis_schema, validate_output
 from .artifacts import JobStore
 from .browser import BrowserRunner, plan_digest
 from .budget import BudgetLimits, RequestBudget
-from .critic import REVIEW_PROMPT, REVIEW_SCHEMA, normalize_review, review_context
+from .critic import REVIEW_PROMPT, REVIEW_SCHEMA, normalize_review, review_context, supported_revision
 from .images import Screenshot
 from .model import ModelError, strict_json
 from .observation import BrowserOptions, Recorder
@@ -343,12 +343,14 @@ class QAService:
                                     calls.records[-1]["status"] = exc.code
                                 raise
                             plan_review["review"] = review
+                            effective_review, ignored = supported_revision(review)
+                            plan_review["ignored_issues"] = ignored
                             plan_review["status"] = review["decision"]
                             self.store.event(job_id, "plan_reviewed", {"decision": review["decision"]})
                             if review["decision"] == "needs_info":
                                 return finish("needs_info", questions=review["questions"])
-                            revise = review["decision"] == "revise"
-                            context = {**context, "review_feedback": review}
+                            revise = effective_review["decision"] == "revise"
+                            context = {**context, "review_feedback": effective_review}
                         if needs_info and not revise:
                             return finish("needs_info", questions=generated["questions"] or ["재현 순서와 완료 상태를 알려주세요."])
                         if feedback or revise:
@@ -363,6 +365,8 @@ class QAService:
                         plan = candidate
                         if self.reviewer is not None:
                             plan_review["status"] = "accepted" if proposal == 0 else "revised_unreviewed"
+                            if proposal == 0 and plan_review.get("ignored_issues"):
+                                plan_review["status"] = "accepted_ignoring_unanchored_review"
                             plan_review["final_plan_sha256"] = plan_digest(plan)
                         break
                 for revision in range(self.limits.max_repairs + 1):

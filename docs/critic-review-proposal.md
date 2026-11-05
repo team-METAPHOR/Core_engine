@@ -16,6 +16,8 @@ Groq 비판자를 선택적으로 연결할 수 있다. 기존 링크를 유지�
 
 두 모델의 동의는 재현 증거가 아니다. 최종 판정은 고정된 `ready/expected/symptom`을 실제 브라우저에서 두 번 관찰한 결과로 결정한다. 개발자가 수정한 뒤 `retest()`는 같은 계획을 사용하며 비판자와 계획 작성자를 다시 호출하지 않는다.
 
+동작·완료 조건·결과 조건을 바꾸는 지적에는 `report` 근거가 필요하다. `proposal`만 인용하면서 검색 버튼이 불필요하다고 주장하면 수정에 사용하지 않고 `ignored_issues`에 보존한다. `CONTRACT_ERROR`는 `validation`, `UNNECESSARY_QUESTION`은 `page` 근거도 허용한다. 이 필터는 근거 참조의 존재를 검사하며 내용의 진실성까지 보장하지 않는다. 호스트 검증 오류는 이 필터와 관계없이 여전히 수정을 요구한다.
+
 ## 서버 연결
 
 ```python
@@ -40,11 +42,14 @@ Groq 어댑터는 고정 HTTPS 주소의 Chat Completions와 strict JSON Schema�
 | `enabled` | 이 서비스에 비판자가 설정됐는지 |
 | `status` | 아래 검토 단계 |
 | `review` | 검증된 검토 응답 또는 null |
+| `ignored_issues` | 근거 참조가 부족하여 수정에 사용하지 않은 지적. 원본 `review`는 그대로 보존 |
 | `reviewed_plan_sha256` | 비판자가 본 유효한 초기 계획 해시. 호스트가 거절한 계획/질문 제안이면 null |
 | `final_plan_sha256` | 최종 저장된 실행 계획 해시 또는 null. 실행 중 선택자 보정으로 달라질 수 있음 |
 | `error_code` | 비판 호출 실패 코드 또는 null |
 
 상태는 `disabled`, `not_reached`, `reviewing`, `accept/revise/needs_info`, `accepted`, `revised_unreviewed`, `revision_exhausted`, `failed`, `interrupted`, `skipped_retest`다. `accepted`는 초기 검토에서 통과했다는 뜻이다. `revised_unreviewed`는 지적 또는 호스트 검증 후 수정본이 호스트 검사를 통과했으나 **비판 모델의 재검토는 하지 않았다**는 뜻이다. 해시가 다른 최종 계획에 초기 승인을 그대로 붙여 해석하면 안 된다.
+
+`accepted_ignoring_unanchored_review`는 초기 계획이 호스트 검사를 통과했으며 비판자의 지적에 필요한 근거 참조가 없어 초기 계획을 유지했다는 뜻이다. 비판자가 승인했다고 표시해서는 안 된다.
 
 `review_proposal.json`에는 비판자가 받은 정제된 제안과 호스트 오류를 저장하여 검토 내용을 추적할 수 있다.
 

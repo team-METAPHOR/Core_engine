@@ -83,3 +83,10 @@ class ScenarioContractTests(unittest.TestCase):
         data['steps'][-1]['target'] = 'https://example.test/app/elsewhere'
         with self.assertRaises(PlanValidationError):
             self.validate(data)
+
+    def test_observing_a_result_never_adds_a_second_click(self):
+        self.intake['required_actions'].append({'action': 'observe', 'value': '', 'source_quote': 'done 표시 후 확인'})
+        self.contract = ground_contract(self.intake, self.report)
+        self.assertEqual(len(self.contract['required_actions']), 4)
+        self.assertEqual(self.contract['reported_observations'], ['done 표시 후 확인'])
+        self.validate(plan(self.url)['plan'])

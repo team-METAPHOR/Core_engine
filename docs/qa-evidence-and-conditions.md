@@ -19,6 +19,11 @@
 | `run.evidence[].timeline` | 동작·완료 대기·결과 관찰의 상대 시간 |
 | `environment.browser_name`, `browser_version` | 실제 실행 엔진과 관찰한 버전. 브라우저가 시작하지 못하면 버전은 `null` |
 | `timings` | 작업 전체와 모델 호출 소요 시간. 인건비 절감률 아님 |
+| `scenario_contract.required_actions` | 원문 인용으로 고정한 필수 동작과 입력값 |
+| `scenario_contract.reported_observations` | 결과 읽기·완료 확인 등 관찰 문구. 추가 클릭이나 페이지 이동으로 실행하지 않음 |
+| `scenario_contract.completion_signal` | 원문에 명시된 완료 표시. 정상/결함 결과 조건과 분리 |
+
+비판 모델의 근거 없는 동작 삭제를 제외한 내역은 `plan_review.ignored_issues`에 남깁니다. `accepted_ignoring_unanchored_review`는 초기 계획을 유지했다는 뜻이며, 두 모델이 동의했다는 표시가 아닙니다. 상세 상태는 [비판 모델 연동 명세](critic-review-proposal.md)를 따릅니다.
 
 `not_reproduced`는 테스트 조건에서 정상 동작을 관찰했다는 뜻입니다. 버그가 없거나 고쳐졌다고 자동 종결하지 않습니다. `inconclusive`, `needs_info`, 취소도 별도 상태로 유지합니다. 로그인 화면이나 401/403만으로 권한 문제가 근본 원인이라고 확정하지 않습니다.
 
