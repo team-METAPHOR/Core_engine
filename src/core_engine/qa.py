@@ -456,7 +456,10 @@ class QAService:
                     event("replanning", {"step": index, "revision": revision})
                     repaired = await calls.invoke("repair", REPAIR_PROMPT,
                         {"intake": intake, "frozen_plan": encode_plan(plan), "failed_step_index": index,
-                         "page": snapshot}, repair_schema(candidates), (recorder.image(snapshot),))
+                         "page": snapshot, "candidates": sorted(set(candidates))},
+                        repair_schema(), (recorder.image(snapshot),))
+                    if repaired["status"] == "repair" and repaired["target"] not in set(candidates):
+                        raise ModelError("MODEL_INVALID_OUTPUT")
                     if repaired["status"] == "needs_info":
                         return finish("needs_info", questions=repaired["questions"] or ["해당 조작 대상과 재현 순서를 확인해주세요."])
                     if repaired["status"] != "repair" or repaired["questions"] or not repaired["target"] or repaired["target"] == step.target:
