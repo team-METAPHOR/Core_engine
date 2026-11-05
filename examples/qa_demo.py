@@ -10,7 +10,7 @@ import threading
 
 from core_engine import (BrowserOptions, BrowserRunner, Generation, JobStore, OpenAIModel,
                          QARequest, QAService, Recorder, RunPolicy)
-from core_engine.qa_schema import decode_plan
+from core_engine.qa_schema import decode_plan, draft_plan
 from analyze_report import FixtureModel
 
 
@@ -43,7 +43,7 @@ class DemoModel:
                      'preconditions': ['cat은 결과가 있고 missing은 결과가 없는 합성 데이터'], 'questions': []}
         elif 'plan' in properties:
             value = {'status': 'ready', 'questions': [], 'rationale': '합성 검색 데이터로 이전 목록 잔존 여부 확인',
-                     'plan': fixture_plan(self.url, self.repair)}
+                     'plan': draft_plan(fixture_plan(self.url, self.repair))}
         elif 'target' in properties:
             value = {'status': 'repair', 'target': '#search', 'reason': '실제 검색 버튼 ID로 대상만 보정', 'questions': []}
         else:

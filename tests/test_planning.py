@@ -3,7 +3,7 @@ import unittest
 
 from core_engine.analysis_schema import validate_output
 from core_engine.planning import PlanValidationError, validate_candidate
-from core_engine.qa_schema import PLAN_DATA_SCHEMA
+from core_engine.qa_schema import PLAN_DATA_SCHEMA, PLAN_SCHEMA, draft_plan, flatten_draft
 from qa_fixtures import check, plan
 
 
@@ -53,6 +53,26 @@ class PlanContractTests(unittest.TestCase):
         with self.assertRaises(PlanValidationError) as error:
             self.validate(self.data)
         self.assertEqual(error.exception.code, 'PLAN_FINAL_ASSERTION')
+
+    def test_generated_draft_separates_setup_from_the_final_trigger(self):
+        data = draft_plan(self.data)
+        generated = {'status': 'ready', 'questions': [], 'rationale': 'test', 'plan': data}
+        validate_output(generated, PLAN_SCHEMA)
+        self.assertEqual(flatten_draft(data), self.data)
+        data['final_action'] = {'action': 'assert_text', 'target': '#ready', 'value': 'done'}
+        with self.assertRaises(ValueError):
+            validate_output(generated, PLAN_SCHEMA)
+        data['final_action'] = {'action': 'fill', 'target': '#query', 'value': 'missing'}
+        data['setup_steps'] = self.data['steps'][:1]
+        validate_output(generated, PLAN_SCHEMA)
+        self.assertEqual([s['action'] for s in flatten_draft(data)['steps']], ['navigate', 'fill'])
+        data['setup_steps'] = []
+        compiled = flatten_draft(data, entry_url='https://example.test/products')
+        self.assertEqual([s['action'] for s in compiled['steps']], ['navigate', 'fill'])
+        self.assertEqual(compiled['steps'][0]['target'], 'https://example.test/products')
+        data['final_action'] = {'action': 'click', 'target': '#search', 'value': 'invented value'}
+        with self.assertRaises(ValueError):
+            validate_output(generated, PLAN_SCHEMA)
 
 
 if __name__ == '__main__':
