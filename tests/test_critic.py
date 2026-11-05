@@ -50,6 +50,16 @@ class CriticContractTests(unittest.TestCase):
         self.assertEqual(set(result['page']), {'url', 'elements'})
         self.assertNotIn('private', str(result))
 
+    def test_critic_elements_drop_geometry(self):
+        element = {'tag': 'button', 'text': '적용', 'selector': '[data-testid=coupon-apply]',
+                   'bounds': {'x': 1, 'y': 2, 'width': 3, 'height': 4},
+                   'client_size': {'width': 3, 'height': 4}, 'scroll_size': {'width': 3, 'height': 4}}
+        snapshot = {'url': 'https://example.test', 'elements': [element]}
+        result = review_context({}, snapshot, {'status': 'ready', 'questions': [], 'plan': {}}, None)
+        self.assertEqual(result['page']['elements'],
+                         [{'tag': 'button', 'text': '적용', 'selector': '[data-testid=coupon-apply]'}])
+        self.assertIn('bounds', snapshot['elements'][0])  # the primary model's snapshot is untouched
+
     def test_revision_filters_each_issue_by_its_evidence(self):
         anchored = normalize_review(review('revise'))
         unanchored = {**anchored['issues'][0], 'code': 'EXTRA_ACTION', 'source_refs': ['proposal']}

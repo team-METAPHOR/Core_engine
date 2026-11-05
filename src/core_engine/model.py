@@ -13,7 +13,7 @@ class ModelError(Exception):
     """Only stable codes may cross the provider boundary; never response bodies."""
 
     CODES = frozenset({
-        "MODEL_AUTH_FAILED", "MODEL_RATE_LIMITED", "MODEL_HTTP_ERROR",
+        "MODEL_AUTH_FAILED", "MODEL_RATE_LIMITED", "MODEL_REQUEST_TOO_LARGE", "MODEL_HTTP_ERROR",
         "MODEL_TIMEOUT", "MODEL_UNAVAILABLE", "MODEL_RESPONSE_TOO_LARGE",
         "MODEL_INVALID_RESPONSE", "MODEL_REFUSED", "MODEL_INCOMPLETE",
         "MODEL_INVALID_OUTPUT",

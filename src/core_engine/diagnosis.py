@@ -37,6 +37,7 @@ _REASONS = {
     "CANCELLED": ("cancelled", "실행이 취소됐습니다.", "필요하면 기존 증거를 검토한 뒤 다시 요청해주세요."),
     "RESET_FAILED": ("environment_blocked", "독립 실행을 위한 테스트 상태 초기화에 실패했습니다.", "초기화 콜백과 테스트 데이터 상태를 확인해주세요."),
     "MODEL_RATE_LIMITED": ("model_unavailable", "AI 공급자의 사용량 제한으로 중단됐습니다.", "공급자 한도를 확인한 뒤 새 작업으로 재시도해주세요."),
+    "MODEL_REQUEST_TOO_LARGE": ("model_unavailable", "AI 요청 하나가 공급자의 요청 크기 한도를 넘어 거절됐습니다.", "같은 요청은 다시 보내도 실패합니다. 공급자 한도나 모델 설정을 확인해주세요."),
     "MODEL_AUTH_FAILED": ("model_unavailable", "AI 공급자 인증에 실패했습니다.", "서버의 비밀정보 설정과 공급자 계정 권한을 확인해주세요."),
     "UNGROUNDED_SCENARIO_REQUIREMENT": ("needs_information", "AI가 추출한 재현 조건을 제보 원문에서 확인하지 못했습니다.", "정확한 조작 순서와 완료 문구를 추가해주세요."),
     "INVALID_PLAN_OR_BASELINE": ("invalid_plan", "재현 계획 또는 비교 기준이 실행 전 검증을 통과하지 못했습니다.", "계획 검증 코드와 제보의 재현 조건을 확인해주세요."),

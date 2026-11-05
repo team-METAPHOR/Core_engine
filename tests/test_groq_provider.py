@@ -50,7 +50,7 @@ class GroqProviderTests(unittest.TestCase):
 
     def test_http_errors_do_not_read_bodies_retry_or_follow_redirects(self):
         for status, code in ((401, 'MODEL_AUTH_FAILED'), (403, 'MODEL_AUTH_FAILED'),
-                             (429, 'MODEL_RATE_LIMITED'), (307, 'MODEL_HTTP_ERROR'), (500, 'MODEL_HTTP_ERROR')):
+                             (429, 'MODEL_RATE_LIMITED'), (413, 'MODEL_REQUEST_TOO_LARGE'), (307, 'MODEL_HTTP_ERROR'), (500, 'MODEL_HTTP_ERROR')):
             with self.subTest(status=status):
                 self.connection.reset_mock()
                 self.response.status = status

@@ -69,6 +69,7 @@ payload = asdict(result)
 |---|---|
 | `MODEL_AUTH_FAILED` | 401/403 인증·권한 오류 |
 | `MODEL_RATE_LIMITED` | 429 호출 한도 |
+| `MODEL_REQUEST_TOO_LARGE` | 413 요청 하나가 공급자 한도(예: 분당 토큰)보다 큼. 같은 요청은 다시 보내도 실패 |
 | `MODEL_HTTP_ERROR` | 그 외 HTTP 오류·리다이렉트 |
 | `MODEL_TIMEOUT` | 소켓 통신 제한 시간 초과 |
 | `MODEL_UNAVAILABLE` | 네트워크·전송 실패 |

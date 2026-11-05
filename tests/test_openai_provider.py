@@ -90,7 +90,7 @@ class OpenAIProviderTests(unittest.TestCase):
         self.connection.request.assert_not_called()
 
     def test_http_failures_and_redirect_do_not_retry_or_read_error_body(self):
-        for status, code in ((401, "MODEL_AUTH_FAILED"), (403, "MODEL_AUTH_FAILED"), (429, "MODEL_RATE_LIMITED"),
+        for status, code in ((401, "MODEL_AUTH_FAILED"), (403, "MODEL_AUTH_FAILED"), (429, "MODEL_RATE_LIMITED"), (413, "MODEL_REQUEST_TOO_LARGE"),
                              (500, "MODEL_HTTP_ERROR"), (307, "MODEL_HTTP_ERROR")):
             with self.subTest(status=status):
                 self.connection.reset_mock()
