@@ -137,6 +137,22 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.report['plan_review']['review']['decision'], 'revise')
             self.assertEqual(result.report['plan_review']['ignored_issues'], objection['assessment']['issues'])
 
+    async def test_page_plan_can_complete_an_under_specified_intake_sequence(self):
+        with site() as (origin, _, _):
+            interpreted = intake()
+            interpreted.update(actions_complete=True, required_actions=[
+                {'action': 'fill', 'value': 'cat', 'source_quote': 'cat 검색'},
+                {'action': 'fill', 'value': 'missing', 'source_quote': 'missing 검색'}])
+            primary = ScriptedModel([interpreted, plan(origin + '/app/mixed'), analysis()])
+            result = await self.service(primary, origin, ScriptedModel([review()])).run(
+                self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced', result)
+            contract = result.report['scenario_contract']
+            self.assertTrue(contract['reported_actions_complete'])
+            self.assertFalse(contract['actions_complete'])
+            self.assertEqual(contract['completeness_basis'], 'partial_reported_sequence')
+            self.assertEqual(len(primary.calls), 3)
+
     async def test_host_navigation_query_is_not_sent_to_either_model(self):
         with site() as (origin, _, _):
             marker = 'private-query-state'

@@ -4,7 +4,7 @@ import unittest
 from core_engine.analysis_schema import validate_output
 from core_engine.planning import PlanValidationError, validate_candidate
 from core_engine.qa_schema import PLAN_SCHEMA, draft_plan
-from core_engine.scenario_contract import ground_contract, planning_schema
+from core_engine.scenario_contract import ground_contract, planning_schema, confirm_contract
 from qa_fixtures import intake, plan
 
 
@@ -21,6 +21,7 @@ class ScenarioContractTests(unittest.TestCase):
             {'action': 'click', 'value': '', 'source_quote': '검색 클릭'}], actions_complete=True,
             completion_signal={'value': 'done', 'source_quote': 'done 표시 후 확인'})
         self.contract = ground_contract(self.intake, self.report)
+        self.contract = confirm_contract(self.validate(plan(self.url)['plan']), self.contract)
 
     def validate(self, data):
         return validate_candidate(data, self.report, entry_url=self.url, timeout_ms=3000, contract=self.contract)
@@ -90,3 +91,38 @@ class ScenarioContractTests(unittest.TestCase):
         self.assertEqual(len(self.contract['required_actions']), 4)
         self.assertEqual(self.contract['reported_observations'], ['done 표시 후 확인'])
         self.validate(plan(self.url)['plan'])
+
+    def test_incomplete_intake_does_not_forbid_submission_controls(self):
+        self.intake['required_actions'] = [r for r in self.intake['required_actions'] if r['action'] == 'fill']
+        self.contract = ground_contract(self.intake, self.report)
+        self.assertTrue(self.contract['reported_actions_complete'])
+        self.assertFalse(self.contract['actions_complete'])
+        candidate = self.validate(plan(self.url)['plan'])
+        confirmed = confirm_contract(candidate, self.contract)
+        self.assertFalse(confirmed['actions_complete'])
+        self.assertEqual(confirmed['completeness_basis'], 'partial_reported_sequence')
+
+    def test_false_static_intake_claim_does_not_force_navigation(self):
+        self.intake['required_actions'] = [{'action': 'observe', 'value': '', 'source_quote': self.report['description']}]
+        self.contract = ground_contract(self.intake, self.report)
+        draft = plan(self.url)
+        draft['plan'] = draft_plan(draft['plan'])
+        validate_output(draft, planning_schema(PLAN_SCHEMA, self.contract))
+        self.validate(plan(self.url)['plan'])
+
+    def test_completeness_is_confirmed_before_critic_and_stays_frozen(self):
+        self.assertTrue(self.contract['actions_complete'])
+        self.assertEqual(self.contract['completeness_basis'], 'intake_and_page_plan_agree')
+        self.assertEqual(confirm_contract(self.validate(plan(self.url)['plan']), self.contract), self.contract)
+
+    def test_duplicate_trigger_requires_an_explicit_repeated_requirement(self):
+        data = plan(self.url)['plan']
+        data['steps'].append(copy.deepcopy(data['steps'][-1]))
+        with self.assertRaises(PlanValidationError) as caught:
+            self.validate(data)
+        self.assertEqual(caught.exception.code, 'PLAN_UNREPORTED_REPEAT')
+        self.report['description'] += ' 검색 클릭을 한 번 더 실행.'
+        self.intake['required_actions'].append({'action': 'click', 'value': '', 'source_quote': '검색 클릭을 한 번 더 실행'})
+        self.contract = ground_contract(self.intake, self.report)
+        candidate = self.validate(data)
+        self.assertTrue(confirm_contract(candidate, self.contract)['actions_complete'])

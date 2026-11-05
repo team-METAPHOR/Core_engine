@@ -27,7 +27,7 @@ from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PRO
                         PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, repair_schema)
 from .redaction import redact_text
 from .reporting import render_report
-from .scenario_contract import ground_contract, planning_schema
+from .scenario_contract import ground_contract, planning_schema, confirm_contract
 from .diagnosis import build_diagnosis
 from .test_export import export_playwright_test, required_test_environment
 
@@ -319,6 +319,9 @@ class QAService:
                                 candidate = validate_candidate(generated["plan"], request.text(),
                                     entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract)
                                 self._validate_plan(candidate)
+                                contract = confirm_contract(candidate, contract)
+                                context = {**context, "scenario_contract": contract}
+                                proposal_schema = planning_schema(PLAN_SCHEMA, contract)
                             except PlanValidationError as exc:
                                 diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field}
                                 plan_validation.append(diagnostic)

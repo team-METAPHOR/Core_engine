@@ -13,6 +13,7 @@ FEEDBACK = {
     "PLAN_REPORTED_SEQUENCE_CHANGED": "Preserve scenario_contract.required_actions in order, including literal inputs and repeat counts. Do not add interactions when actions_complete is true.",
     "PLAN_UNSUPPORTED_NAVIGATION": "Remove navigation/reload after the initial entry unless it is explicitly grounded in the reported required_actions. It can reset the state under test.",
     "PLAN_UNSUPPORTED_RESPONSE_CHECK": "A response_status path/status must be explicitly supplied in the report/test_data; do not invent an endpoint or HTTP result.",
+    "PLAN_UNREPORTED_REPEAT": "Do not duplicate the final trigger in both setup_steps and final_action. Consecutive identical interactions require explicitly repeated required_actions from the report.",
 }
 
 

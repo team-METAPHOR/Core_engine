@@ -29,8 +29,19 @@ def ground_contract(intake, report):
                 raise ValueError("navigation needs an exact quoted URL or path")
     return {"required_actions": [item for item in actions if item["action"] != "observe"],
             "reported_observations": [item["source_quote"] for item in actions if item["action"] == "observe"],
-            "actions_complete": intake.get("actions_complete", False),
+            "reported_actions_complete": intake.get("actions_complete", False),
+            "actions_complete": False, "completeness_basis": "provisional_before_page_plan",
             "completion_signal": signal}
+
+
+def confirm_contract(plan, contract):
+    """An intake guess must not constrain the unseen UI's submission mechanics."""
+    if contract.get("completeness_basis") != "provisional_before_page_plan":
+        return contract
+    complete = contract.get("reported_actions_complete", False) and contract_error(
+        plan, {**contract, "actions_complete": True}) is None
+    return {**contract, "actions_complete": complete,
+            "completeness_basis": "intake_and_page_plan_agree" if complete else "partial_reported_sequence"}
 
 
 def planning_schema(schema, contract):
@@ -61,13 +72,27 @@ def planning_schema(schema, contract):
 
 
 def contract_error(plan, contract):
-    if not contract or not (contract["completion_signal"] or contract["required_actions"] or contract["actions_complete"]):
+    if not contract:
+        return None
+    actual = [step for step in plan.steps[1:] if step.action != "assert_text"]
+    required = contract["required_actions"]
+    repeat = 1
+    for index, step in enumerate(actual):
+        repeat = repeat + 1 if index and step == actual[index - 1] else 1
+        if repeat <= 1:
+            continue
+        permitted, streak = 1, 0
+        for item in required:
+            streak = streak + 1 if item["action"] == step.action and (
+                step.action != "fill" or item["value"] == step.value) else 0
+            permitted = max(permitted, streak)
+        if repeat > permitted:
+            return "PLAN_UNREPORTED_REPEAT", "steps"
+    if not (contract["completion_signal"] or required or contract["actions_complete"]):
         return None
     signal = contract["completion_signal"]
     if signal and (plan.ready.kind != "text" or plan.ready.value != signal["value"]):
         return "PLAN_REPORTED_COMPLETION_CHANGED", "ready"
-    actual = [step for step in plan.steps[1:] if step.action != "assert_text"]
-    required = contract["required_actions"]
     if sum(step.action == "navigate" for step in actual) > sum(item["action"] == "navigate" for item in required):
         return "PLAN_UNSUPPORTED_NAVIGATION", "steps"
     cursor = 0

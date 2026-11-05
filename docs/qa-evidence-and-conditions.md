@@ -22,6 +22,10 @@
 | `scenario_contract.required_actions` | 원문 인용으로 고정한 필수 동작과 입력값 |
 | `scenario_contract.reported_observations` | 결과 읽기·완료 확인 등 관찰 문구. 추가 클릭이나 페이지 이동으로 실행하지 않음 |
 | `scenario_contract.completion_signal` | 원문에 명시된 완료 표시. 정상/결함 결과 조건과 분리 |
+| `scenario_contract.reported_actions_complete` | 화면 관찰 전 해석 모델이 제안한 완전성. 이것만으로 추가 동작을 금지하지 않음 |
+| `scenario_contract.actions_complete`, `completeness_basis` | 초기 해석과 화면 기반의 유효한 계획이 순서·횟수까지 일치할 때만 전체 순서를 고정. 그 외에는 인용한 필수 동작의 순서를 보존하는 부분 시나리오 |
+
+접수 단계의 잘못된 “완전한 순서” 판정이 검색 제출이나 필터 클릭을 막지 않도록 페이지 기반 계획과 대조한 후 확정합니다. 두 단계의 일치가 실제 제보의 완전성을 보장하는 것은 아닙니다. 동일한 조작을 연속 반복하려면 제보에서 추출한 반복 동작이 필요하며, `setup_steps` 마지막과 `final_action`에 같은 트리거를 중복해 넣으면 실행 전에 거절합니다.
 
 비판 모델의 근거 없는 동작 삭제를 제외한 내역은 `plan_review.ignored_issues`에 남깁니다. `accepted_ignoring_unanchored_review`는 초기 계획을 유지했다는 뜻이며, 두 모델이 동의했다는 표시가 아닙니다. 상세 상태는 [비판 모델 연동 명세](critic-review-proposal.md)를 따릅니다.
 

@@ -10,6 +10,7 @@ import hashlib
 from importlib.metadata import version
 from io import StringIO
 import json
+import mmap
 import os
 from pathlib import Path
 import random
@@ -178,7 +179,10 @@ def source_metadata():
     digest = hashlib.sha256()
     for path in sorted(source.rglob("*.py")):
         digest.update(path.relative_to(source).as_posix().encode())
-        digest.update(path.read_bytes())
+        # Memory-mapped reads also work when macOS file-provider reads time out.
+        if path.stat().st_size:
+            with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as contents:
+                digest.update(contents)
     metadata = {"engine_source_sha256": digest.hexdigest(), "python": sys.version.split()[0],
                 "playwright": version("playwright"), "suite_version": SUITE_VERSION}
     try:

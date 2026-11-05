@@ -149,6 +149,10 @@ never navigate or click. The host separates observations from executable require
 them via ready/expected/symptom. Clicking a named Confirm button is different from inspecting a result.
 """
 PLAN_PROMPT = DATA_RULES + """
+The intake's actions_complete is provisional: do not treat it as proof of a fully specified UI sequence.
+Use scenario_contract.actions_complete, which is false until intake and a valid page-based plan agree.
+Preserve all quoted required actions in order, while adding necessary submission controls when that
+sequence is partial. Put the final trigger ONLY in final_action, not again at the end of setup_steps.
 The environment is trusted host configuration applied to each fresh browser context. Matching
 viewport dimensions, browser and registered session do not need extra scenario actions or questions.
 Build one bounded, deterministic browser test from the interpreted report and current page snapshot.
