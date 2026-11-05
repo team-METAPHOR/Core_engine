@@ -131,16 +131,45 @@ class QATests(unittest.IsolatedAsyncioTestCase):
             data = plan(origin + '/app/mixed')
             data['plan']['steps'].append({'action': 'assert_text', 'target': '#result', 'value': 'empty'})
             model = ScriptedModel([intake(), data])
-            result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
+            result = await self.service(model, origin, limits=QALimits(max_plan_revisions=0)).run(
+                self.request(origin), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.error_code, 'INVALID_PLAN_OR_BASELINE', result)
             self.assertIsNone(result.report['run'])
             self.assertEqual(len(model.calls), 2)
             self.assertEqual([s['phase'] for s in result.report['observations']], ['discovery'])
 
+    async def test_invalid_readiness_is_revised_before_browser_execution(self):
+        with site() as (origin, _, _):
+            invalid = plan(origin + '/app/mixed')
+            invalid['plan']['ready'] = invalid['plan']['expected']
+            model = ScriptedModel([intake(), invalid, plan(origin + '/app/mixed'), analysis()])
+            result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.status, 'completed', result)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced')
+            self.assertEqual(result.report['plan_validation'], [{'proposal': 0, 'code': 'PLAN_READINESS_IS_OUTCOME', 'field': 'ready'}])
+            self.assertIn('validation_feedback', model.calls[2]['context'])
+            self.assertEqual([call['phase'] for call in result.report['model_calls']],
+                             ['intake', 'plan', 'plan_revision', 'report'])
+            self.assertEqual(result.report['repairs'], [])
+
+    async def test_invented_input_revision_is_bounded_and_never_executed(self):
+        with site() as (origin, _, _):
+            invalid = plan(origin + '/app/mixed')
+            invalid['plan']['steps'][4]['value'] = 'fabricated-query'
+            model = ScriptedModel([intake(), invalid, invalid])
+            result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.status, 'failed', result)
+            self.assertEqual(result.error_code, 'INVALID_PLAN_OR_BASELINE')
+            self.assertEqual(len(model.calls), 3)
+            self.assertEqual(len(result.report['plan_validation']), 2)
+            self.assertIsNone(result.report['run'])
+            self.assertIsNone(result.report['scenario'])
+            self.assertEqual([s['phase'] for s in result.report['observations']], ['discovery'])
+
     async def test_ambiguous_oracle_is_inconclusive_and_not_replanned(self):
         with site() as (origin, _, _):
             data = plan(origin + '/app/mixed')
-            data['plan']['expected'] = check('#ready', 'done')
+            data['plan']['expected'] = check('#result', 'true', kind='visible')
             model = ScriptedModel([intake(), data, analysis()])
             result = await self.service(model, origin).run(self.request(origin), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.status, 'inconclusive', result)

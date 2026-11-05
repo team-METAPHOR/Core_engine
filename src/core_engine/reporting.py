@@ -47,6 +47,9 @@ def render_report(report: dict) -> str:
         lines += ['- ' + escape(value) for value in item['observed_facts']]
     if report.get('questions'):
         lines += ['', '## 추가 확인 사항', ''] + ['- ' + escape(value) for value in report['questions']]
+    if report.get('plan_validation'):
+        lines += ['', '## 실행 전 계획 검증', '']
+        lines += [f"- 계획 제안 {item['proposal'] + 1}: " + escape(item['code']) for item in report['plan_validation']]
     if report.get('scenario'):
         lines += ['', '## 재현 순서', '']
         for i, step in enumerate(report['scenario']['steps'], 1):

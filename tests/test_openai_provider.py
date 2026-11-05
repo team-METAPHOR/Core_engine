@@ -66,6 +66,16 @@ class OpenAIProviderTests(unittest.TestCase):
         self.response.read.return_value = json.dumps(data).encode()
         self.assertIsNone(self.generate().usage)
 
+    def test_non_ascii_report_reaches_model_as_readable_literal_text(self):
+        context = {'report': '검색어는 없는상품, 합성 상품은 머그입니다.'}
+        self.model.generate(instructions='trusted', context=context, schema=analysis_schema({'report'}))
+        body = json.loads(self.connection.request.call_args.kwargs['body'])
+        text = body['input'][0]['content'][0]['text']
+        self.assertIn('없는상품', text)
+        self.assertIn('머그', text)
+        self.assertNotIn('\\u', text)
+        self.assertEqual(json.loads(text), context)
+
     def test_validated_images_use_data_urls_without_remote_fetches(self):
         image = screenshot()
         self.model.generate(instructions="trusted", context={"report": "screenshot"},

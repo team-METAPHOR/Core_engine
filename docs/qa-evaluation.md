@@ -4,6 +4,8 @@
 
 [첫 실제 AI 평가 결과](evaluation-baseline-2026-11-05.md)에 12개 사례 × 3회 실행의 성공·실패를 모두 기록했다.
 
+[개선 전후 비교](evaluation-improvement-2026-11-05.md)는 같은 사례·순서·채점 기준으로 다시 실행한 결과와 추가 사례의 결과를 구분한다.
+
 ## 평가 사례
 
 | 사례 ID | 대상 | 기대 결과 |
@@ -22,6 +24,19 @@
 | `environment_unauthorized` | 테스트 대상이 HTTP 401 반환 | 접근 실패로 검증 보류/실패 |
 
 버그/정상 쌍은 **같은 제보 텍스트와 같은 버그 화면 이미지**를 사용한다. 정상 사례는 이미 수정된 대상에 과거 제보를 검증하는 상황이다. 이는 일반적인 정상 스크린샷 분류 평가와 다르다. 모든 사례에서 제출 텍스트에 적힌 기대 동작은 정당한 입력으로 유지한다.
+
+### 추가 개발 사례: `qa-transfer-v1`
+
+`--suite transfer`는 아래 4개 상황의 버그/정상 쌍 8개를 별도로 실행한다. 기존 12개의 제보·정답·채점 기준은 유지한다. 추가 사례도 공개된 개발 세트이며 실제 고객사 또는 미공개 평가 결과를 뜻하지 않는다.
+
+| 사례 접두어 | 확인할 동작 | 독립 검사 |
+|---|---|---|
+| `activation` | 이름 입력 후 계속 버튼 활성화 | 입력 이력·완료 신호·실제 disabled 상태 |
+| `quantity` | 수량 변경 후 합계 갱신 | 지정 수량 요청 이력·완료 신호·실제 합계 텍스트 |
+| `dismissal` | 알림 닫기 후 배너 숨김 | 닫기 이력·완료 신호·실제 표시 여부 |
+| `collection` | 한 번 추가한 항목이 중복되지 않음 | 추가 이력·완료 신호·실제 목록 요소 수 |
+
+버그 사례 ID에는 `_bug`, 정상 사례에는 `_normal`이 붙는다. 조작 이력은 제보에 명시된 입력·횟수와 일치해야 한다. 기존 사례와 추가 사례의 점수는 따로 보고하며, 실제 실행하지 않은 반복을 완료한 것처럼 합산하지 않는다.
 
 화면 제목은 상품 검색·상품 안내 같은 일반 이름이다. 대상 URL은 매 실행 생성한 무작위 경로이며 `bug/fixed/control`이나 정답 레이블을 포함하지 않는다. 버그/정상 전환은 서버 메모리에서만 수행한다. 모델에는 제보·정제된 관찰·이미지·엔진 계약만 제공하고 사례 ID, 정답, reference plan, 독립 채점 결과를 보내지 않는다.
 
@@ -49,6 +64,13 @@ PYTHONPATH=src python -m core_engine.evaluation --repeats 1 --retest-fixed
 PYTHONPATH=src python -m core_engine.evaluation --live --repeats 3 --retest-fixed
 ```
 
+추가 사례만 실행:
+
+```bash
+PYTHONPATH=src python -m core_engine.evaluation --suite transfer --repeats 1 --retest-fixed
+PYTHONPATH=src python -m core_engine.evaluation --suite transfer --live --repeats 1 --retest-fixed --max-model-calls 40
+```
+
 로컬에서 직접 작성한 `.env`를 사용할 경우 먼저 명시적으로 불러온다. 파일 내용이나 키를 콘솔에 출력하지 않는다.
 
 ```bash
@@ -68,6 +90,7 @@ PYTHONPATH=src python -m core_engine.evaluation --live \
 | 옵션 | 기본값과 의미 |
 |---|---|
 | `--live` | 생략하면 고정 모델. 지정하면 실제 유료 모델 호출 |
+| `--suite` | `core`: 기존 12개. `transfer`: 추가 개발 사례 8개 |
 | `--repeats` | 3회. 1~10회 허용 |
 | `--case` | 생략하면 12개 전체. 여러 번 지정하여 선택 가능 |
 | `--seed` | 17. 사례 실행 순서의 무작위화만 고정하며 모델의 샘플링 결과를 고정하지 않음 |
