@@ -1,6 +1,7 @@
 """Sanitized browser snapshots and local evidence artifacts."""
 
 from dataclasses import dataclass, field
+import asyncio
 from datetime import datetime, timezone
 import re
 from uuid import uuid4
@@ -19,8 +20,19 @@ class BrowserOptions:
     step_timeout_ms: int = 3000
     mask_selectors: tuple[str, ...] = ()
     session_headers: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    browser_name: str = "chromium"
+    record_video: bool = False
+    video_fps: int = 4
+    video_max_seconds: int = 60
+    response_delay_ms: int = 0
 
     def __post_init__(self):
+        if self.browser_name not in {"chromium", "firefox", "webkit"}:
+            raise ValueError("unsupported browser engine")
+        if type(self.response_delay_ms) is not int or not 0 <= self.response_delay_ms <= 2000:
+            raise ValueError("response delay must be 0..2000 ms")
+        if type(self.record_video) is not bool or type(self.video_fps) is not int or not 1 <= self.video_fps <= 10 or type(self.video_max_seconds) is not int or not 1 <= self.video_max_seconds <= 120:
+            raise ValueError("invalid video options")
         if type(self.width) is not int or type(self.height) is not int or not 320 <= self.width <= 1920 or not 320 <= self.height <= 1080:
             raise ValueError("viewport must be between 320x320 and 1920x1080")
         if not isinstance(self.app_version, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", self.app_version):
@@ -44,7 +56,8 @@ class BrowserOptions:
 
     def public(self):
         return {"width": self.width, "height": self.height, "app_version": self.app_version,
-                "test_context_id": self.test_context_id, "session_mode": "fixed_headers" if self.session_headers else "anonymous"}
+                "test_context_id": self.test_context_id, "session_mode": "fixed_headers" if self.session_headers else "anonymous",
+                "browser_name": self.browser_name, "response_delay_ms": self.response_delay_ms}
 
 
 # Snapshot extraction executes only this fixed engine script. Page text remains untrusted.
@@ -96,10 +109,24 @@ class Recorder:
         self.total_image_bytes = 0
         self.revision = -1
         self.plan_sha256 = None
+        self.browser_version = None
+        self.videos = []
+        self.total_video_bytes = 0
+        self._capture_lock = asyncio.Lock()
+        self.active_video = None
 
-    async def capture(self, page, *, attempt, step, phase, network, errors):
-        if len(self.snapshots) >= 256:
-            raise ValueError("snapshot limit exceeded")
+    def open_video(self, session):
+        from .video import VideoCapture
+        capture = VideoCapture(self, session.capture_video_frame, attempt=session.attempt, origin=session.started)
+        self.videos.append(capture.metadata)
+        self.active_video = capture.start()
+        return self.active_video
+
+    async def masked_image(self, page):
+        async with self._capture_lock:
+            return await self._masked_image(page)
+
+    async def _masked_image(self, page):
         sensitive = ["[data-private]", "[data-sensitive]", "input[type=password]", "input[type=hidden]", "iframe",
                      *self.options.mask_selectors]
         elements = await page.evaluate(_ELEMENTS, sensitive)
@@ -113,7 +140,14 @@ class Recorder:
                 item[key] = cleaned
         elements = [item for item in elements if item["selector"] and len(item["selector"]) <= 256 and "REDACTED" not in item["selector"]]
         data = await page.screenshot(type="png", full_page=False, mask=masks, animations="disabled", timeout=3000)
-        image = Screenshot(data)
+        return Screenshot(data), elements
+
+    async def capture(self, page, *, attempt, step, phase, network, errors):
+        if len(self.snapshots) >= 256:
+            raise ValueError("snapshot limit exceeded")
+        image, elements = await self.masked_image(page)
+        if self.active_video:
+            self.active_video.add(image)
         self.total_image_bytes += len(image.data)
         if self.total_image_bytes > 64 * 1024 * 1024:
             raise ValueError("job screenshot budget exceeded")

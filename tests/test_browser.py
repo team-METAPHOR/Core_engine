@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import asyncio
 import importlib.util
 import json
@@ -55,6 +55,17 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
                 return True
             result = await BrowserRunner(local_policy(origin)).run(search_plan(origin, "/app/mixed"), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.verdict.reason_code, "ATTEMPTS_DISAGREE")
+
+    async def test_old_completion_cannot_confirm_an_unsubmitted_final_input(self):
+        with site() as (origin, _, _):
+            async def reset(_):
+                return True
+            original = search_plan(origin)
+            missing_submit = replace(original, steps=original.steps[:-1])
+            result = await BrowserRunner(local_policy(origin)).run(
+                missing_submit, reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.verdict.value, 'inconclusive')
+            self.assertEqual([a.blocker for a in result.attempts], ['STALE_COMPLETION_SIGNAL'] * 2)
 
     async def test_blocked_browser_requests_are_never_sent(self):
         with site() as (origin, hits, _):

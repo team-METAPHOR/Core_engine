@@ -18,6 +18,14 @@ INTAKE_SCHEMA = _object(
     expected_behavior=optional_text(), expectation_source=_enum("report", "image_inferred", "unknown"),
     symptom_description=_text(), reproduction_steps=_array(_text(800), 10),
     preconditions=_array(_text(800), 6), questions=_array(_text(800), 5),
+    required_actions=_array({"anyOf": [
+        _object(action=_enum("observe"), value=_enum(""), source_quote=_text(800)),
+        _object(action=_enum("click"), value=_enum(""), source_quote=_text(800)),
+        _object(action=_enum("fill"), value=optional_text(2000), source_quote=_text(800)),
+        _object(action=_enum("navigate"), value=_text(2000), source_quote=_text(800)),
+    ]}, 18),
+    actions_complete={"type": "boolean"},
+    completion_signal={"anyOf": [_object(value=_text(300), source_quote=_text(800)), {"type": "null"}]},
 )
 
 CHECK_SCHEMA = {"anyOf": [
@@ -26,6 +34,7 @@ CHECK_SCHEMA = {"anyOf": [
             value=_enum("true", "false"), other_selector=_enum("")),
     _object(kind=_enum("overlap"), selector=_text(256), value=_enum("true", "false"), other_selector=_text(256)),
     _object(kind=_enum("count"), selector=_text(256), value=_text(4), other_selector=_enum("")),
+    _object(kind=_enum("response_status"), selector=_text(256), value=_text(3), other_selector=_enum("GET", "HEAD", "OPTIONS")),
 ]}
 ACTION_SCHEMA = {"anyOf": [
     _object(action=_enum("navigate", "click"), target=_text(2048), value=_enum("")),
@@ -100,6 +109,8 @@ Return only schema-conforming Korean JSON. We perform ordinary web QA, not vulne
 Only describe what the supplied evidence establishes. Separate observed facts from hypotheses.
 """
 INTAKE_PROMPT = DATA_RULES + """
+The environment is trusted host configuration. Its viewport/browser/session are already configured,
+not missing UI actions. Do not ask how to set dimensions that match the supplied width/height.
 Interpret the reporter screenshot and optional description. A screenshot is a single moment: do not
 invent preceding actions, server responses or intent. Identify a concrete bug candidate and expected
 behavior. Use expectation_source=report only for an explicit claim in the supplied description or
@@ -115,9 +126,39 @@ For data-dependent behavior, the exact input and expected outcome must be suppor
 test_data. A vague claim that some unknown query/account/item should work is insufficient: ask for
 the missing input and its known expected outcome before testing. Never replace missing facts with
 plausible example data. Preserve supplied literal values, including spelling and punctuation.
+Extract required_actions from the original report, in order, with exact source_quote substrings from
+the supplied report fields. Classify reading/checking/waiting as observe, not as an interaction.
+Use fill.value only for a literal included in that quote; click/observe value is empty. For navigate,
+value is the exact reported destination URL or /path. Omit the host-provided initial page navigation.
+Include a later navigate/reload only
+when explicitly reported. Do not invent implicit clicks: a report saying 'search A then B' does not
+necessarily specify how submission happens. Set actions_complete=true only when the exact full UI
+action sequence is explicit, or a static observation needs no interaction; otherwise false. Preserve
+explicit repeat counts. A one-click report requires one click, not two. These requirements constrain
+later plans and critiques, so incomplete descriptions must not be marked complete.
+When the report explicitly names a POST-action completion indicator, extract completion_signal with
+its exact value and the exact containing source_quote. Otherwise use null. This must be a completion
+indicator independent of normal/buggy outcomes, not the expected result, an input, or initial text.
+Never derive a completion signal or action quote from the screenshot, guesses, or another model.
+The host opens the registered entry page before reported actions. Do not include this initial page
+opening in required_actions; include navigate only for an explicitly reported LATER navigation.
+For navigate, value MUST be the exact destination URL or /path written in the source_quote. Without
+an explicit destination, do not invent a navigate requirement. Reading/checking/confirming a result,
+counting elements, or waiting for a completion message are OBSERVATIONS: classify these as observe,
+never navigate or click. The host separates observations from executable required actions and handles
+them via ready/expected/symptom. Clicking a named Confirm button is different from inspecting a result.
 """
 PLAN_PROMPT = DATA_RULES + """
+The intake's actions_complete is provisional: do not treat it as proof of a fully specified UI sequence.
+Use scenario_contract.actions_complete, which is false until intake and a valid page-based plan agree.
+Preserve all quoted required actions in order, while adding necessary submission controls when that
+sequence is partial. Put the final trigger ONLY in final_action, not again at the end of setup_steps.
+The environment is trusted host configuration applied to each fresh browser context. Matching
+viewport dimensions, browser and registered session do not need extra scenario actions or questions.
 Build one bounded, deterministic browser test from the interpreted report and current page snapshot.
+scenario_contract contains grounded report requirements. Preserve its completion signal and ordered
+actions. When actions_complete is true, do not add or drop interactions. A critique cannot override
+these quoted requirements. Do not append navigation after interactions to satisfy a final-action rule.
 Images are ordered as indicated by image_order: the current page is the initial state, and the reporter
 screenshot (when supplied) shows the reported symptom. Use DOM boundaries to distinguish adjacent text;
 do not concatenate text from different elements into one selector's expected value.
@@ -155,6 +196,11 @@ expected is clipped=false and symptom is clipped=true; for UNWANTED overlap, exp
 and symptom is overlap=true. A control that should be enabled has expected enabled=true and symptom
 enabled=false. For a banner that should disappear, expected visible=false and symptom visible=true.
 Keep normal and defective meanings fixed even if the current page already looks corrected.
+For a specifically reported HTTP response, response_status uses selector=exact same-origin path,
+other_selector=GET/HEAD/OPTIONS, value=three-digit status. Both path and status must be explicitly in
+the report/test_data. This observes an actual routed response; it never makes a new request itself.
+Use an independent completion signal. Unknown endpoints or POST/write operations are unsupported:
+ask for a supported test environment instead of fabricating a request or treating a blocked action as a bug.
 The expected/symptom predicates must operationalize the given expectation and are frozen before testing.
 For a static visual issue, navigation alone can be the entire test. Do not add clicks or fills just
 to make a longer plan: those actions may change the state being inspected. Use visible=true on the

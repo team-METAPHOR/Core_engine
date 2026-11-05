@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metaphor-core-engine"
-version = "0.2.0"
+version = "0.3.0"
 description = "Screenshot-driven web QA reproduction and evidence reports"
 requires-python = ">=3.11"
 dependencies = ["Pillow==13.0.0"]
 
 [project.optional-dependencies]
 browser = ["playwright==1.64.1"]
+video = ["imageio-ffmpeg==0.6.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -20,6 +20,7 @@ def intake(status='ready'):
             'expected_behavior': '없는 검색어에는 빈 목록 표시', 'expectation_source': 'report',
             'symptom_description': '이전 cat 목록이 남음', 'reproduction_steps': ['cat 검색 후 missing 검색'],
             'preconditions': ['cat은 결과 있음, missing은 결과 없음'],
+            'required_actions': [], 'actions_complete': False, 'completion_signal': None,
             'questions': ['기대 동작을 알려주세요.'] if status == 'needs_info' else []}
 
 
@@ -63,6 +64,6 @@ class ScriptedModel:
         if callable(response):
             response = response(kwargs)
         response = copy.deepcopy(response)
-        if kwargs.get('schema') == PLAN_SCHEMA and response.get('plan') is not None:
+        if 'plan' in kwargs.get('schema', {}).get('properties', {}) and response.get('plan') is not None:
             response['plan'] = draft_plan(response['plan'])
         return Generation(json.dumps(response), 'offline-fixture', TokenUsage(100, 100))

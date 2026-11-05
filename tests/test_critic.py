@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from core_engine import BrowserOptions, JobStore, ModelError, QALimits, QARequest, QAService
-from core_engine.critic import REVIEW_SCHEMA, normalize_review, review_context
+from core_engine.critic import REVIEW_SCHEMA, normalize_review, review_context, supported_revision
 from core_engine.analysis_schema import validate_output
 from fixture_site import site
 from qa_fixtures import ScriptedModel, analysis, intake, plan, screenshot
@@ -50,6 +50,26 @@ class CriticContractTests(unittest.TestCase):
         self.assertEqual(set(result['page']), {'url', 'elements'})
         self.assertNotIn('private', str(result))
 
+    def test_revision_filters_each_issue_by_its_evidence(self):
+        anchored = normalize_review(review('revise'))
+        unanchored = {**anchored['issues'][0], 'code': 'EXTRA_ACTION', 'source_refs': ['proposal']}
+        contract = {**anchored['issues'][0], 'code': 'CONTRACT_ERROR', 'source_refs': ['validation']}
+        mixed = {**anchored, 'issues': [unanchored, *anchored['issues'], contract]}
+        effective, ignored = supported_revision(mixed)
+        self.assertEqual(effective['decision'], 'revise')
+        self.assertEqual(effective['issues'], [*anchored['issues'], contract])
+        self.assertEqual(ignored, [unanchored])
+        self.assertEqual(len(mixed['issues']), 3)
+
+    def test_host_environment_excludes_secrets_and_is_separate_from_page(self):
+        result = review_context({}, {'url': 'https://example.test', 'elements': []},
+            {'status': 'ready', 'questions': [], 'plan': {}}, None,
+            {'width': 1280, 'height': 800, 'browser_name': 'firefox', 'session_mode': 'fixed_headers',
+             'session_headers': {'Authorization': 'private'}, 'storage_state': 'private'})
+        self.assertEqual(result['environment'], {'width': 1280, 'height': 800, 'browser_name': 'firefox',
+                                                'session_mode': 'fixed_headers'})
+        self.assertNotIn('private', str(result))
+
 
 @unittest.skipUnless(importlib.util.find_spec('playwright'), 'install browser extra')
 class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
@@ -78,6 +98,8 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(before.report['plan_review']['reviewed_plan_sha256'], before.report['plan_sha256'])
             self.assertNotIn('images', critic.calls[0])
             self.assertNotIn('intake', critic.calls[0]['context'])
+            self.assertEqual(critic.calls[0]['context']['environment']['width'], 1280)
+            self.assertTrue(critic.calls[0]['context']['environment']['browser_version'])
             self.assertEqual([r['role'] for r in before.report['model_calls']], ['primary', 'primary', 'critic', 'primary'])
             state['fixed'] = True
             after = await service.retest(before.job_id, reset=reset, is_authorized=lambda: True)
@@ -100,6 +122,56 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.report['plan_review']['status'], 'revised_unreviewed')
             self.assertNotEqual(result.report['plan_review']['reviewed_plan_sha256'], result.report['plan_sha256'])
             self.assertIn('review_feedback', primary.calls[2]['context'])
+
+    async def test_proposal_only_objection_cannot_delete_search_trigger(self):
+        with site() as (origin, _, _):
+            objection = review('revise')
+            objection['assessment']['issues'] = [{'code': 'EXTRA_ACTION', 'field': 'steps',
+                'reason': '입력 이후 검색 클릭을 삭제하세요.', 'source_refs': ['proposal']}]
+            primary = ScriptedModel([intake(), plan(origin + '/app/mixed'), analysis()])
+            result = await self.service(primary, origin, ScriptedModel([objection])).run(
+                self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced', result)
+            self.assertEqual(len(primary.calls), 3)
+            self.assertEqual(result.report['plan_review']['status'], 'accepted_ignoring_unanchored_review')
+            self.assertEqual(result.report['plan_review']['review']['decision'], 'revise')
+            self.assertEqual(result.report['plan_review']['ignored_issues'], objection['assessment']['issues'])
+
+    async def test_page_plan_can_complete_an_under_specified_intake_sequence(self):
+        with site() as (origin, _, _):
+            interpreted = intake()
+            interpreted.update(actions_complete=True, required_actions=[
+                {'action': 'fill', 'value': 'cat', 'source_quote': 'cat 검색'},
+                {'action': 'fill', 'value': 'missing', 'source_quote': 'missing 검색'}])
+            primary = ScriptedModel([interpreted, plan(origin + '/app/mixed'), analysis()])
+            result = await self.service(primary, origin, ScriptedModel([review()])).run(
+                self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced', result)
+            contract = result.report['scenario_contract']
+            self.assertTrue(contract['reported_actions_complete'])
+            self.assertFalse(contract['actions_complete'])
+            self.assertEqual(contract['completeness_basis'], 'partial_reported_sequence')
+            self.assertEqual(len(primary.calls), 3)
+            self.assertNotIn('actions_complete', primary.calls[1]['context']['intake'])
+            self.assertNotIn('required_actions', primary.calls[1]['context']['intake'])
+            self.assertNotIn('reported_actions_complete', primary.calls[1]['context']['scenario_contract'])
+            self.assertNotIn('reported_observations', primary.calls[1]['context']['scenario_contract'])
+
+    async def test_second_host_revision_fixes_duplicate_within_shared_six_calls(self):
+        with site() as (origin, _, _):
+            correct = plan(origin + '/app/mixed')
+            incomplete = copy.deepcopy(correct)
+            incomplete['plan']['steps'] = [incomplete['plan']['steps'][0], *incomplete['plan']['steps'][-2:]]
+            repeated = copy.deepcopy(correct)
+            repeated['plan']['steps'].append(copy.deepcopy(repeated['plan']['steps'][-1]))
+            primary = ScriptedModel([intake(), incomplete, repeated, correct, analysis()])
+            critic = ScriptedModel([review('revise')])
+            result = await self.service(primary, origin, critic).run(
+                self.request(origin), reset=reset, is_authorized=lambda: True)
+            self.assertEqual(result.report['run']['verdict']['value'], 'reproduced', result)
+            self.assertEqual(len(result.report['model_calls']), 6)
+            self.assertEqual(len(critic.calls), 1)
+            self.assertEqual(primary.calls[3]['context']['validation_feedback']['code'], 'PLAN_UNREPORTED_REPEAT')
 
     async def test_host_navigation_query_is_not_sent_to_either_model(self):
         with site() as (origin, _, _):
@@ -146,9 +218,11 @@ class CriticFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_critic_failure_is_explicit_and_stops_reproduction(self):
         with site() as (origin, _, _):
             primary = ScriptedModel([intake(), plan(origin + '/app/mixed')])
-            critic = ScriptedModel([ModelError('MODEL_RATE_LIMITED')])
+            critic = ScriptedModel([ModelError('MODEL_RATE_LIMITED', retry_after_seconds=45)])
             result = await self.service(primary, origin, critic).run(self.request(origin), reset=reset, is_authorized=lambda: True)
             self.assertEqual(result.error_code, 'MODEL_RATE_LIMITED', result)
+            self.assertEqual(result.report['model_calls'][-1]['retry_after_seconds'], 45)
+            self.assertEqual(result.report['diagnosis']['next_actions'][0]['retry_after_seconds'], 45)
             self.assertEqual(result.report['plan_review']['status'], 'failed')
             self.assertIsNone(result.report['run'])
             self.assertEqual(len(critic.calls), 1)

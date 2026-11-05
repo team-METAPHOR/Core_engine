@@ -7,7 +7,7 @@ import os
 import re
 import ssl
 
-from .model import Generation, ModelError, TokenUsage, strict_json
+from .model import Generation, ModelError, TokenUsage, strict_json, retry_after_seconds
 
 
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}")
@@ -55,7 +55,8 @@ class GroqModel:
             response = connection.getresponse()
             if response.status != 200:
                 raise ModelError({401: "MODEL_AUTH_FAILED", 403: "MODEL_AUTH_FAILED",
-                                  429: "MODEL_RATE_LIMITED"}.get(response.status, "MODEL_HTTP_ERROR"))
+                                  429: "MODEL_RATE_LIMITED"}.get(response.status, "MODEL_HTTP_ERROR"),
+                                 retry_after_seconds=retry_after_seconds(response.getheader("retry-after")))
             data = response.read(1024 * 1024 + 1)
             if len(data) > 1024 * 1024:
                 raise ModelError("MODEL_RESPONSE_TOO_LARGE")

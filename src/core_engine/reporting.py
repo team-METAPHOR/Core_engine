@@ -15,6 +15,8 @@ def describe_check(check):
         return f'{target}의 화면 텍스트: “{value}”'
     if check['kind'] == 'count':
         return f'{target}에 해당하는 요소 {value}개'
+    if check['kind'] == 'response_status':
+        return f"{check['other_selector']} {target} 응답 코드: {value}"
     phrases = {'visible': ('표시됨', '표시되지 않음'), 'enabled': ('활성화됨', '비활성화됨'),
                'clipped': ('영역을 넘치거나 내용이 잘림', '영역 안에 표시됨'),
                'overlap': ('영역이 겹침', '영역이 겹치지 않음')}
@@ -28,6 +30,8 @@ def render_report(report: dict) -> str:
     env_text = f"{environment['width']} × {environment['height']}px · 앱 버전 {environment['app_version']}"
     if environment.get('test_context_id'):
         env_text += ' · 테스트 환경 ' + environment['test_context_id']
+    if environment.get('browser_name'):
+        env_text += ' · ' + environment['browser_name'] + ' ' + (environment.get('browser_version') or '버전 미확인')
     lines = ['# QA 검증 보고서', '', '## ' + escape(report['title']), '',
              '- 작업 ID: ' + escape(report['job_id']), '- 상태: ' + escape(report['status']),
              '- 버그 유형: ' + escape(report['classification']),
@@ -39,6 +43,14 @@ def render_report(report: dict) -> str:
         lines.append('- 처리 오류: ' + escape(report['error_code']))
     if report.get('regression'):
         lines.append('- 수정 후 비교: ' + escape(report['regression']))
+    if report.get('diagnosis'):
+        diagnosis = report['diagnosis']
+        lines += ['', '## 재현 결과와 중단 이유', '', escape(diagnosis['summary']),
+                  '', '코드 수준의 근본 원인이 확정된 것은 아닙니다.', '', '**다음 조치:**', '']
+        lines += ['- ' + escape(item['message']) + ' (담당: ' + escape(item['owner']) + ')'
+                  for item in diagnosis['next_actions']]
+        for item in diagnosis['attempts']:
+            lines += ['- ' + escape(f"시도 {item['attempt']} · {item['stage']} · 완료 {item['completed_steps']}/{item['total_steps']} · 중단 {item['blocker'] or '없음'}")]
     if report.get('intake'):
         item = report['intake']
         lines += ['', '## 제보 해석', '', '**기대 동작:** ' + escape(item['expected_behavior']),
@@ -87,6 +99,21 @@ def render_report(report: dict) -> str:
             lines += ['- ' + escape(value) for value in item['verification_steps']]
             lines += ['', '**고려 사항:**', ''] + ['- ' + escape(value) for value in item['tradeoffs']]
         lines += ['', '**부족한 정보:**', ''] + ['- ' + escape(value) for value in analysis['missing_information']]
+    if report.get('video_enabled'):
+        lines += ['', '## 재현 영상', '', '민감 요소를 가린 화면 샘플링 영상입니다. 오디오는 없으며 모든 순간의 동작을 기록하는 원본 영상은 아닙니다.', '']
+        if not report.get('videos'):
+            lines += ['브라우저 영상이 생성되지 않았습니다. 초기 실행 오류와 추가 확인 사항을 확인하세요.']
+        for item in report.get('videos', []):
+            artifact = item.get('artifact') or {}
+            name = artifact.get('name', '')
+            if item['status'] == 'ready' and re.fullmatch(r'video_[a-f0-9]{64}\.webm', name):
+                lines += [f"- 계획 버전 {item['revision']} · 시도 {item['attempt']} · [영상 보기]({name}) · {item['duration_seconds']}초 · 잘림: {item['truncated']}"]
+            else:
+                lines += ['- ' + escape(f"시도 {item['attempt']} · {item['status']} · {item.get('capture_error') or '없음'}")]
+    exported = report.get('test_export', {})
+    if exported.get('status') == 'ready' and exported.get('artifact', {}).get('name') == 'reproduction.spec.ts':
+        lines += ['', '## 실행 가능한 재현 테스트', '', '[Playwright 테스트 다운로드](reproduction.spec.ts)', '',
+                  '정상 동작을 검사하므로 버그 버전에서는 실패하고 수정 버전에서는 통과해야 합니다. 실행할 테스트 환경과 초기화 모듈을 설정하세요.']
     lines += ['', '## 화면 근거', '']
     # Only engine-generated local names become links; no model-supplied URL is rendered.
     for snapshot in report['observations']:

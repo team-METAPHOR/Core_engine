@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict, dataclass, field, replace
 import json
+import hashlib
 import re
 import threading
 import time
@@ -15,7 +16,7 @@ from .analysis_schema import analysis_schema, validate_output
 from .artifacts import JobStore
 from .browser import BrowserRunner, plan_digest
 from .budget import BudgetLimits, RequestBudget
-from .critic import REVIEW_PROMPT, REVIEW_SCHEMA, normalize_review, review_context
+from .critic import REVIEW_PROMPT, REVIEW_SCHEMA, normalize_review, review_context, supported_revision
 from .images import Screenshot
 from .model import ModelError, strict_json
 from .observation import BrowserOptions, Recorder
@@ -26,6 +27,9 @@ from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PRO
                         PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, draft_plan, encode_plan, flatten_draft, repair_schema)
 from .redaction import redact_text
 from .reporting import render_report
+from .scenario_contract import ground_contract, planning_schema, confirm_contract, planner_contract
+from .diagnosis import build_diagnosis
+from .test_export import export_playwright_test, required_test_environment
 
 
 @dataclass(frozen=True)
@@ -65,7 +69,7 @@ class QALimits:
     max_repairs: int = 2
     max_runtime_seconds: int = 180
     max_reported_tokens: int = 40_000
-    max_plan_revisions: int = 1
+    max_plan_revisions: int = 2
 
     def __post_init__(self):
         for key, low, high in (("max_model_calls", 1, 10), ("max_repairs", 0, 2),
@@ -112,7 +116,8 @@ class _ModelCalls:
         record = {"phase": phase, "role": "critic" if phase == "plan_review" else "primary",
                   "status": "started", "model": None, "usage": None}
         self.records.append(record)
-        arguments = dict(instructions=instructions, context=context, schema=schema)
+        call_started = time.monotonic()
+        arguments = dict(instructions=instructions, context=clean_tree(context), schema=schema)
         if images:
             arguments["images"] = images
         task = asyncio.create_task(asyncio.to_thread((model if model is not None else self.model).generate, **arguments))
@@ -133,6 +138,8 @@ class _ModelCalls:
             return clean_tree(data)
         except (ModelError, PolicyError) as exc:
             record["status"] = exc.code
+            if isinstance(exc, ModelError) and exc.retry_after_seconds is not None:
+                record["retry_after_seconds"] = exc.retry_after_seconds
             raise
         except asyncio.CancelledError:
             record["status"] = "interrupted"
@@ -141,6 +148,7 @@ class _ModelCalls:
             record["status"] = "MODEL_INVALID_OUTPUT"
             raise ModelError("MODEL_INVALID_OUTPUT") from None
         finally:
+            record["elapsed_seconds"] = round(time.monotonic() - call_started, 3)
             if not task.done():
                 # Cancels the waiter; an in-flight provider HTTP call may finish in its own timeout.
                 # The thread never writes job state or artifacts.
@@ -160,7 +168,7 @@ class QAService:
 
     async def run(self, request: QARequest, *, reset: Callable[[int], Awaitable[bool]],
                   is_authorized: Callable[[], bool], cancelled: threading.Event | None = None,
-                  _baseline=None, _parent=None) -> QAResult:
+                  _baseline=None, _parent=None, _job_created=None) -> QAResult:
         if not isinstance(request, QARequest) or request.program_id != self.policy.program_id:
             raise ValueError("request must belong to this program")
         self.policy.check_url(request.entry_url)
@@ -182,6 +190,8 @@ class QAService:
         # Authorization also covers external model processing, not just browser requests.
         guard()
         job_id = self.store.create()
+        if _job_created:
+            _job_created(job_id)
         recorder = Recorder(self.store, job_id, self.options)
         calls = _ModelCalls(self.model, self.limits, guard)
         image_ref = self.store.image(job_id, request.screenshot) if request.screenshot else None
@@ -190,6 +200,7 @@ class QAService:
             **request.text(), "screenshot": image_ref})
         self.store.event(job_id, "received", {"parent_job_id": _parent, "baseline_job_id": _baseline})
         intake, plan, run, analysis, repairs = None, None, None, None, []
+        contract = None
         plan_validation = []
         plan_review = {"enabled": self.reviewer is not None, "status": "skipped_retest" if _baseline else
                        "not_reached" if self.reviewer is not None else "disabled",
@@ -204,8 +215,10 @@ class QAService:
                 "schema_version": "2", "job_id": job_id, "report_id": request.report_id,
                 "program_id": request.program_id, "status": status, "title": (intake or {}).get("title", "QA 검증 결과"),
                 "classification": classification, "human_review_required": True,
-                "scope_revision": self.policy.scope_revision, "environment": self.options.public(),
+                "scope_revision": self.policy.scope_revision,
+                "environment": {**self.options.public(), "browser_version": recorder.browser_version},
                 "intake": intake, "scenario": clean_tree(encode_plan(plan)) if plan else None,
+                "scenario_contract": contract,
                 "plan_sha256": plan_digest(plan) if plan else None,
                 "run": asdict(run) if run else None, "analysis": analysis,
                 "questions": list(questions), "error_code": error,
@@ -214,11 +227,27 @@ class QAService:
                 "plan_review": plan_review,
                 "source_screenshot": image_ref, "baseline_job_id": _baseline, "parent_job_id": _parent,
                 "regression": self._regression(baseline_report, run) if _baseline else None,
+                "videos": recorder.videos, "video_enabled": self.options.record_video,
+                "timings": {"total_seconds": round(time.monotonic() - started, 3),
+                    "model_seconds": round(sum(c.get("elapsed_seconds", 0) for c in calls.records), 3)},
                 "limitations": ["관찰된 증상과 실제 제품 요구사항의 일치는 사람이 검토해야 합니다.",
                     "재현 안 됨은 테스트한 조건에서 증상을 확인하지 못했다는 뜻입니다.",
                     "AI 원인·해결 방향은 가설이며 코드 수정이나 PR 생성을 수행하지 않습니다.",
                     "마스킹은 모든 개인정보를 탐지하지 않습니다. 승인된 합성 테스트 데이터를 사용하세요."],
             }
+            report["diagnosis"] = build_diagnosis(report)
+            report["test_export"] = {"status": "not_applicable", "artifact": None}
+            if run and run.verdict.value == "reproduced" and plan:
+                try:
+                    source = export_playwright_test(plan, policy=self.policy, options=self.options, test_name=report["title"]).encode()
+                    name = "reproduction.spec.ts"
+                    self.store.write(job_id, name, source)
+                    report["test_export"] = {"status": "ready", "plan_sha256": plan_digest(plan),
+                        "artifact": {"name": name, "sha256": hashlib.sha256(source).hexdigest(),
+                                     "bytes": len(source), "mime_type": "text/plain"},
+                        "required_environment": required_test_environment(plan, self.options)}
+                except (ValueError, OSError):
+                    report["test_export"] = {"status": "failed", "artifact": None, "error_code": "TEST_EXPORT_FAILED"}
             result = QAResult(job_id, request.report_id, request.program_id, status, report, tuple(questions), error)
             self.store.write_json(job_id, "result.json", asdict(result))
             self.store.write(job_id, "report.md", render_report(report).encode("utf-8"))
@@ -241,18 +270,30 @@ class QAService:
                         raise ValueError("baseline plan digest mismatch")
                     plan.validate_scope(self.policy)
                     intake = saved["intake"]
+                    contract = baseline_report.get("scenario_contract")
+                    if baseline_report["environment"].get("browser_name", "chromium") != self.options.browser_name:
+                        raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
+                    if baseline_report["environment"].get("response_delay_ms", 0) != self.options.response_delay_ms:
+                        raise PolicyError("BASELINE_ENVIRONMENT_MISMATCH")
                     self.store.event(job_id, "retesting", {"baseline_job_id": _baseline})
                 else:
                     self.store.event(job_id, "interpreting")
                     intake = await calls.invoke("intake", INTAKE_PROMPT,
-                        {"report": request.text(), "has_screenshot": request.screenshot is not None},
+                        {"report": request.text(), "has_screenshot": request.screenshot is not None,
+                         "environment": self.options.public()},
                         INTAKE_SCHEMA, (request.screenshot,) if request.screenshot else ())
                     if intake["status"] == "needs_info" or not intake["expected_behavior"].strip() or intake["expectation_source"] == "unknown":
                         return finish("needs_info", questions=intake["questions"] or ["이 화면에서 기대하는 정상 동작을 알려주세요."])
                     if intake["questions"]:
                         return finish("needs_info", questions=intake["questions"])
+                    try:
+                        contract = ground_contract(intake, request.text())
+                    except ValueError:
+                        return finish("needs_info", questions=["조작 순서와 처리 완료를 알리는 문구를 원문 그대로 확인해주세요."],
+                                      error="UNGROUNDED_SCENARIO_REQUIREMENT")
                 budget = RequestBudget(self.browser_limits)
-                runner = BrowserRunner(self.policy, self.browser_limits, options=self.options, recorder=recorder)
+                runner = BrowserRunner(self.policy, self.browser_limits, options=self.options, recorder=recorder,
+                    expected_browser_version=baseline_report["environment"].get("browser_version") if baseline_report else None)
                 if plan is None:
                     self.store.event(job_id, "discovering")
                     snapshot = await runner.inspect(request.entry_url, reset=reset, is_authorized=is_authorized,
@@ -263,12 +304,16 @@ class QAService:
                     if request.screenshot is not None:
                         images += (request.screenshot,)
                         image_order.append("reporter_screenshot")
-                    context = {"entry_url": redact_text(request.entry_url), "intake": intake, "report": request.text(),
-                               "page": snapshot, "image_order": image_order}
+                    context = {"entry_url": redact_text(request.entry_url),
+                               "intake": {k: v for k, v in intake.items() if k not in {"required_actions", "actions_complete", "completion_signal"}},
+                               "report": request.text(),
+                               "page": snapshot, "image_order": image_order, "scenario_contract": planner_contract(contract),
+                               "environment": {**self.options.public(), "browser_version": recorder.browser_version}}
+                    proposal_schema = planning_schema(PLAN_SCHEMA, contract)
                     for proposal in range(self.limits.max_plan_revisions + 1):
                         generated = await calls.invoke("plan" if proposal == 0 else "plan_revision",
                                                        PLAN_PROMPT if proposal == 0 else PLAN_REVISION_PROMPT,
-                                                       context, PLAN_SCHEMA, images)
+                                                       context, proposal_schema, images)
                         if generated["plan"] is not None:
                             generated = {**generated, "plan": flatten_draft(generated["plan"], entry_url=redact_text(request.entry_url))}
                         needs_info = generated["status"] == "needs_info" or generated["plan"] is None or generated["questions"]
@@ -276,8 +321,11 @@ class QAService:
                         if not needs_info:
                             try:
                                 candidate = validate_candidate(generated["plan"], request.text(),
-                                    entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms)
+                                    entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms, contract=contract)
                                 self._validate_plan(candidate)
+                                contract = confirm_contract(candidate, contract)
+                                context = {**context, "scenario_contract": planner_contract(contract)}
+                                proposal_schema = planning_schema(PLAN_SCHEMA, contract)
                             except PlanValidationError as exc:
                                 diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field}
                                 plan_validation.append(diagnostic)
@@ -292,7 +340,7 @@ class QAService:
                                 "proposal": generated, "validation_feedback": feedback})
                             try:
                                 review = await calls.invoke("plan_review", REVIEW_PROMPT,
-                                    review_context(request.text(), snapshot, generated, feedback), REVIEW_SCHEMA,
+                                    review_context(request.text(), snapshot, generated, feedback, context["environment"]), REVIEW_SCHEMA,
                                     model=self.reviewer)
                                 review = normalize_review(review)
                             except asyncio.CancelledError:
@@ -304,12 +352,14 @@ class QAService:
                                     calls.records[-1]["status"] = exc.code
                                 raise
                             plan_review["review"] = review
+                            effective_review, ignored = supported_revision(review)
+                            plan_review["ignored_issues"] = ignored
                             plan_review["status"] = review["decision"]
                             self.store.event(job_id, "plan_reviewed", {"decision": review["decision"]})
                             if review["decision"] == "needs_info":
                                 return finish("needs_info", questions=review["questions"])
-                            revise = review["decision"] == "revise"
-                            context = {**context, "review_feedback": review}
+                            revise = effective_review["decision"] == "revise"
+                            context = {**context, "review_feedback": effective_review}
                         if needs_info and not revise:
                             return finish("needs_info", questions=generated["questions"] or ["재현 순서와 완료 상태를 알려주세요."])
                         if feedback or revise:
@@ -324,6 +374,8 @@ class QAService:
                         plan = candidate
                         if self.reviewer is not None:
                             plan_review["status"] = "accepted" if proposal == 0 else "revised_unreviewed"
+                            if proposal == 0 and plan_review.get("ignored_issues"):
+                                plan_review["status"] = "accepted_ignoring_unanchored_review"
                             plan_review["final_plan_sha256"] = plan_digest(plan)
                         break
                 for revision in range(self.limits.max_repairs + 1):

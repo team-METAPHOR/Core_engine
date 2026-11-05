@@ -10,3 +10,6 @@ dist/
 !.env.example
 .qa-results/
 .qa-evals/
+.qa-*.log
+tests/js/node_modules/
+tests/js/test-results/

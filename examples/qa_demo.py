@@ -40,7 +40,8 @@ class DemoModel:
                      'expected_behavior': '결과가 없으면 empty 표시', 'expectation_source': 'report',
                      'symptom_description': 'missing 검색 완료 후 cat 결과가 남음',
                      'reproduction_steps': ['cat 검색', 'missing 검색'],
-                     'preconditions': ['cat은 결과가 있고 missing은 결과가 없는 합성 데이터'], 'questions': []}
+                     'preconditions': ['cat은 결과가 있고 missing은 결과가 없는 합성 데이터'], 'questions': [],
+                     'required_actions': [], 'actions_complete': False, 'completion_signal': None}
         elif 'plan' in properties:
             value = {'status': 'ready', 'questions': [], 'rationale': '합성 검색 데이터로 이전 목록 잔존 여부 확인',
                      'plan': draft_plan(fixture_plan(self.url, self.repair))}
@@ -55,7 +56,8 @@ async def execute(origin, store, state, args, live_model):
     url = origin + '/catalog'
     policy = RunPolicy('local-demo', 1, origin, ('/catalog',), allow_private_targets=True,
                        private_cidrs=('127.0.0.1/32',))
-    options = BrowserOptions(app_version='fixture-bug', step_timeout_ms=500 if not args.live else 3000)
+    options = BrowserOptions(app_version='fixture-bug', step_timeout_ms=500 if not args.live else 3000,
+                             record_video=args.video)
     async def reset(_attempt):
         # Fixture has no server state; every fresh browser context starts empty.
         return True
@@ -96,6 +98,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', default='.qa-results', help='비공개 결과 저장 경로')
     parser.add_argument('--live', action='store_true', help='실제 유료 OpenAI 이미지 분석 호출')
+    parser.add_argument('--video', action='store_true', help='마스킹한 화면을 WebM 영상으로 저장 (ffmpeg 필요)')
     parser.add_argument('--repair', action='store_true', help='고정 모델이 잘못된 버튼 ID를 제안했다가 보정하는 데모')
     parser.add_argument('--retest-fixed', action='store_true', help='수정된 합성 화면에서 같은 시나리오로 재검증')
     args = parser.parse_args()

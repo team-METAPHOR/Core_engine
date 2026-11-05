@@ -8,7 +8,7 @@ _ISSUE = _object(
         code=_enum("MISSING_STEP", "EXTRA_ACTION", "WRONG_READINESS", "WRONG_OUTCOME",
                    "UNSUPPORTED_INPUT", "UNNECESSARY_QUESTION", "CONTRACT_ERROR"),
         field=_enum("steps", "ready", "expected", "symptom", "input_data", "questions"),
-        reason=_text(600), source_refs=_array(_enum("report", "page", "proposal", "validation"), 4, 1))
+        reason=_text(600), source_refs=_array(_enum("report", "page", "proposal", "validation", "environment"), 5, 1))
 # Branch-specific fields make contradictory decisions impossible at the schema boundary.
 REVIEW_SCHEMA = _object(assessment={"anyOf": [
     _object(decision=_enum("accept"), summary=_text(600)),
@@ -43,6 +43,15 @@ measures BOTH expected and symptom, twice in fresh sessions. These predicates AR
 All Check.value fields are STRINGS by contract: "true"/"false" for booleans, integer strings for count,
 exact strings for text. Do not flag the use of string booleans. ready is a separate host check after
 steps, not a missing step; requesting a ready step is an error. Click/navigate value must be "".
+response_status is also supported: selector is the exact reported endpoint path, value is
+the reported HTTP status string, other_selector is GET/HEAD/OPTIONS. Expected and symptom may compare
+200 vs a reported error code; a separate DOM completion signal still establishes readiness.
+Trusted registered sessions are supplied by the backend; never request their credentials in model text.
+The supplied environment is trusted host configuration: width/height are already applied to every
+fresh browser context, and browser/session/delay are also configured outside the scenario steps.
+Do not request a resize/login/configuration action or ask how to configure a matching environment.
+If a reported requirement actually differs from this environment, identify that mismatch explicitly.
+Review the existing checks rather than requesting extra assertions.
 Never request an extra assert_text/wait_for_text/click to verify the final result. wait_for_text is not
 an allowed action. A last click or fill followed by ready/expected/symptom is a complete test.
 For a static issue, navigate alone is valid; readiness can be visibility of the affected content.
@@ -53,15 +62,21 @@ an assert_text away from the last position; remove the redundant assertion and u
 Output assessment with one branch: accept has decision+summary only; revise adds 1..5 issues;
 needs_info adds 1..3 questions. No issues/questions in the accept branch.
 Each issue must cite supplied source_refs and name the specific mismatch, briefly in Korean.
+Action/readiness/outcome changes require report evidence. Merely citing proposal is not evidence that
+a reported operation is unnecessary. A search/submit button can be the required trigger between fills;
+never remove it solely because text was already entered or because final observations happen later.
 You receive sanitized text/DOM only, not screenshots; never claim to have inspected image pixels.
 Never output a replacement plan, code, browser actions, bug verdict or advice to bypass host checks.
 """
 
 
-def review_context(report, snapshot, proposal, validation):
+def review_context(report, snapshot, proposal, validation, environment=None):
     # No image bytes, artifact paths, network logs, hidden answers or source code go to the critic.
     return {"report": report, "page": {"url": snapshot["url"], "elements": snapshot["elements"]},
-            "proposal": {key: proposal[key] for key in ("status", "questions", "plan")}, "validation": validation}
+            "proposal": {key: proposal[key] for key in ("status", "questions", "plan")}, "validation": validation,
+            "environment": {key: value for key, value in (environment or {}).items() if key in {
+                "width", "height", "browser_name", "browser_version", "test_context_id", "session_mode",
+                "response_delay_ms", "app_version"}}}
 
 
 def normalize_review(response):
@@ -69,3 +84,17 @@ def normalize_review(response):
     item = response["assessment"]
     return {"decision": item["decision"], "summary": item["summary"],
             "issues": item.get("issues", []), "questions": item.get("questions", [])}
+
+
+def supported_revision(review):
+    """A proposal-only objection cannot justify changing an otherwise valid reported scenario."""
+    if review["decision"] != "revise":
+        return review, []
+    kept, ignored = [], []
+    for issue in review["issues"]:
+        sources = set(issue["source_refs"])
+        supported = 'report' in sources or (issue['code'] == 'CONTRACT_ERROR' and 'validation' in sources)
+        if issue['code'] == 'UNNECESSARY_QUESTION' and 'page' in sources:
+            supported = True
+        (kept if supported else ignored).append(issue)
+    return {**review, 'decision': 'revise' if kept else 'accept', 'issues': kept}, ignored
