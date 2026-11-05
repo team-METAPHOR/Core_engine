@@ -147,8 +147,8 @@ async function update(op,value){
 
 
 @contextmanager
-def fixture_site(family):
-    site = FixtureSite(family)
+def fixture_site(family, *, site_factory=FixtureSite):
+    site = site_factory(family)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):

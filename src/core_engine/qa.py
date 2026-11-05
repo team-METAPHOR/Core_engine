@@ -19,9 +19,10 @@ from .images import Screenshot
 from .model import ModelError, strict_json
 from .observation import BrowserOptions, Recorder
 from .plan import Step
+from .planning import PlanValidationError, validate_candidate
 from .policy import PolicyError, RunPolicy, canonical_url
 from .qa_schema import (INTAKE_SCHEMA, PLAN_DATA_SCHEMA, PLAN_SCHEMA, INTAKE_PROMPT, PLAN_PROMPT,
-                        REPAIR_PROMPT, decode_plan, encode_plan, repair_schema)
+                        PLAN_REVISION_PROMPT, REPAIR_PROMPT, decode_plan, encode_plan, repair_schema)
 from .redaction import redact_text
 from .reporting import render_report
 
@@ -63,10 +64,12 @@ class QALimits:
     max_repairs: int = 2
     max_runtime_seconds: int = 180
     max_reported_tokens: int = 40_000
+    max_plan_revisions: int = 1
 
     def __post_init__(self):
         for key, low, high in (("max_model_calls", 1, 10), ("max_repairs", 0, 2),
-                               ("max_runtime_seconds", 1, 600), ("max_reported_tokens", 100, 100_000)):
+                               ("max_runtime_seconds", 1, 600), ("max_reported_tokens", 100, 100_000),
+                               ("max_plan_revisions", 0, 2)):
             value = getattr(self, key)
             if type(value) is not int or not low <= value <= high:
                 raise ValueError("invalid QA limit")
@@ -184,6 +187,7 @@ class QAService:
             **request.text(), "screenshot": image_ref})
         self.store.event(job_id, "received", {"parent_job_id": _parent, "baseline_job_id": _baseline})
         intake, plan, run, analysis, repairs = None, None, None, None, []
+        plan_validation = []
         baseline_report = None
 
         def finish(status, *, questions=(), error=None):
@@ -198,6 +202,7 @@ class QAService:
                 "run": asdict(run) if run else None, "analysis": analysis,
                 "questions": list(questions), "error_code": error,
                 "observations": recorder.snapshots, "repairs": repairs, "model_calls": calls.records,
+                "plan_validation": plan_validation,
                 "source_screenshot": image_ref, "baseline_job_id": _baseline, "parent_job_id": _parent,
                 "regression": self._regression(baseline_report, run) if _baseline else None,
                 "limitations": ["관찰된 증상과 실제 제품 요구사항의 일치는 사람이 검토해야 합니다.",
@@ -249,13 +254,29 @@ class QAService:
                     if request.screenshot is not None:
                         images += (request.screenshot,)
                         image_order.append("reporter_screenshot")
-                    generated = await calls.invoke("plan", PLAN_PROMPT,
-                        {"entry_url": redact_text(request.entry_url), "intake": intake, "report": request.text(),
-                         "page": snapshot, "image_order": image_order}, PLAN_SCHEMA, images)
-                    if generated["status"] == "needs_info" or generated["plan"] is None or generated["questions"]:
-                        return finish("needs_info", questions=generated["questions"] or ["재현 순서와 완료 상태를 알려주세요."])
-                    plan = decode_plan(generated["plan"], entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms)
-                    self._validate_plan(plan)
+                    context = {"entry_url": redact_text(request.entry_url), "intake": intake, "report": request.text(),
+                               "page": snapshot, "image_order": image_order}
+                    for proposal in range(self.limits.max_plan_revisions + 1):
+                        generated = await calls.invoke("plan" if proposal == 0 else "plan_revision",
+                                                       PLAN_PROMPT if proposal == 0 else PLAN_REVISION_PROMPT,
+                                                       context, PLAN_SCHEMA, images)
+                        if generated["status"] == "needs_info" or generated["plan"] is None or generated["questions"]:
+                            return finish("needs_info", questions=generated["questions"] or ["재현 순서와 완료 상태를 알려주세요."])
+                        try:
+                            candidate = validate_candidate(generated["plan"], request.text(),
+                                entry_url=request.entry_url, timeout_ms=self.options.step_timeout_ms)
+                            self._validate_plan(candidate)
+                        except PlanValidationError as exc:
+                            diagnostic = {"proposal": proposal, "code": exc.code, "field": exc.field}
+                            plan_validation.append(diagnostic)
+                            self.store.event(job_id, "plan_rejected", diagnostic)
+                            if proposal == self.limits.max_plan_revisions:
+                                return finish("failed", error="INVALID_PLAN_OR_BASELINE")
+                            context = {**context, "validation_feedback": {**diagnostic, "message": exc.feedback},
+                                       "rejected_plan": clean_tree(generated["plan"])}
+                            continue
+                        plan = candidate
+                        break
                 for revision in range(self.limits.max_repairs + 1):
                     guard()
                     recorder.revision = revision

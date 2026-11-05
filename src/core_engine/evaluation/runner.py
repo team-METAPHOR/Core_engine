@@ -26,7 +26,8 @@ from . import SUITE_VERSION
 from .cases import CASES, reference_plan
 from .fixture_model import FixtureModel
 from .grading import grade, render_summary, summarize, verdict
-from .site import fixture_site
+from .site import FixtureSite, fixture_site
+from . import transfer
 
 
 async def reset(_):
@@ -102,7 +103,7 @@ class OracleRecorder(Recorder):
         return snapshot
 
 
-async def capture_source(case, site, store, options):
+async def capture_source(case, site, store, options, reference_builder=reference_plan):
     site.activate("control" if case.category == "needs_info" else "issue")
     job_id = store.create()
     recorder = Recorder(store, job_id, options)
@@ -110,7 +111,7 @@ async def capture_source(case, site, store, options):
     if case.category == "needs_info":
         await runner.inspect(site.url, reset=reset, is_authorized=lambda: True)
     else:
-        result = await runner.run(reference_plan(case.family, site.url), reset=reset, is_authorized=lambda: True)
+        result = await runner.run(reference_builder(case.family, site.url), reset=reset, is_authorized=lambda: True)
         if result.verdict.value != "reproduced":
             raise ValueError("source fixture did not produce the intended symptom")
     return recorder.image(recorder.snapshots[-1])
@@ -190,7 +191,15 @@ def source_metadata():
 
 
 async def run_suite(args, provider=None):
-    selected = [case for case in CASES if not args.case or case.id in args.case]
+    suite = getattr(args, "suite", "core")
+    if suite not in {"core", "transfer"}:
+        raise ValueError("unknown evaluation suite")
+    cases, suite_version, site_factory, reference_builder = (
+        (CASES, SUITE_VERSION, FixtureSite, reference_plan) if suite == "core" else
+        (transfer.CASES, transfer.SUITE_VERSION, transfer.TransferSite, transfer.reference_plan))
+    if args.case and not set(args.case).issubset({case.id for case in cases}):
+        raise ValueError("selected cases do not belong to this suite")
+    selected = [case for case in cases if not args.case or case.id in args.case]
     tasks = [(case, repeat) for repeat in range(1, args.repeats + 1) for case in selected]
     random.Random(args.seed).shuffle(tasks)
     root = Path(args.output).resolve() / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ_") + uuid4().hex[:8])
@@ -203,7 +212,8 @@ async def run_suite(args, provider=None):
             indexes[(case.id, repeat, "retest")] = len(rows)
             rows.append(blank_row(case, repeat, "retest"))
     budget = CallBudget(args.max_model_calls)
-    manifest = {**source_metadata(), "mode": "live" if args.live else "fixture",
+    manifest = {**source_metadata(), "suite_version": suite_version, "suite": suite,
+        "mode": "live" if args.live else "fixture",
         "model": getattr(provider, "model", "offline-fixture"), "seed": args.seed,
         "repeats": args.repeats, "max_model_calls": args.max_model_calls, "retest_fixed": args.retest_fixed,
         "cases": [asdict(case) for case in selected], "order": [[case.id, repeat] for case, repeat in tasks],
@@ -221,13 +231,13 @@ async def run_suite(args, provider=None):
                 rows[index]["reason"] = "EVAL_MODEL_CALL_LIMIT"
                 continue
             try:
-                with fixture_site(case.family) as site:
+                with fixture_site(case.family, site_factory=site_factory) as site:
                     store = JobStore(root / "trials" / trial_id)
                     options = BrowserOptions(app_version="evaluation-1")
-                    image = await capture_source(case, site, store, options)
+                    image = await capture_source(case, site, store, options, reference_builder)
                     site.activate(case.variant)
                     request = QARequest(uuid4().hex, "qa-evaluation", site.url, image, **case.report_text())
-                    base_model = provider if args.live else FixtureModel(case, site.url)
+                    base_model = provider if args.live else FixtureModel(case, site.url, reference_builder)
                     data, oracle, record = await evaluate_job(case, site, store, options, budget.wrap(base_model, trial_id), request=request)
                     rows[index].update(record)
                     rows[index]["report_path"] = (store.root / data["job_id"] / "report.md").relative_to(root).as_posix()
@@ -277,7 +287,8 @@ def main():
     parser = argparse.ArgumentParser(description="소규모 합성 QA 평가. 기본값은 고정 모델 연결 검증입니다.")
     parser.add_argument("--live", action="store_true", help="실제 유료 모델 호출; 환경변수 설정 필요")
     parser.add_argument("--list", action="store_true", help="평가 사례만 출력")
-    parser.add_argument("--case", action="append", choices=[case.id for case in CASES], help="여러 번 지정 가능")
+    parser.add_argument("--suite", choices=("core", "transfer"), default="core", help="기존 12개 또는 추가 8개 개발 사례")
+    parser.add_argument("--case", action="append", choices=[case.id for case in (*CASES, *transfer.CASES)], help="여러 번 지정 가능")
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--seed", type=int, default=17, help="실행 순서만 고정. 모델의 무작위성은 고정하지 않음")
     parser.add_argument("--output", default=".qa-evals")
@@ -286,8 +297,11 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.repeats <= 10 or not 1 <= args.max_model_calls <= 1000:
         parser.error("repeats는 1..10, max-model-calls는 1..1000이어야 합니다.")
+    cases = CASES if args.suite == "core" else transfer.CASES
+    if args.case and not set(args.case).issubset({case.id for case in cases}):
+        parser.error("선택한 사례가 해당 suite에 속하지 않습니다.")
     if args.list:
-        print(json.dumps([{"id": case.id, "category": case.category} for case in CASES], ensure_ascii=False, indent=2))
+        print(json.dumps([{"id": case.id, "category": case.category} for case in cases], ensure_ascii=False, indent=2))
         return
     try:
         provider = OpenAIModel.from_env() if args.live else None

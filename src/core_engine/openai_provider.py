@@ -42,7 +42,7 @@ class OpenAIModel:
             "model": self.model,
             "instructions": instructions,
             "input": [{"role": "user", "content": [{
-                "type": "input_text", "text": json.dumps(context, ensure_ascii=True),
+                "type": "input_text", "text": json.dumps(context, ensure_ascii=False),
             }]}],
             "text": {"format": {"type": "json_schema", "name": "bug_analysis_v1",
                                 "strict": True, "schema": schema}},

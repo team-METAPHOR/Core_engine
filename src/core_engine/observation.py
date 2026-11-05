@@ -75,10 +75,17 @@ _ELEMENTS = """sensitive => {
     }
     return Array.from(document.querySelectorAll('input,button,select,textarea,a,[role],[id],[data-testid],h1,h2,p,label,span,li'))
         .slice(0,600).filter(el => !el.closest(excluded) && el.getClientRects().length)
-        .slice(0,80).map(el => ({selector: selector(el), tag: el.localName,
+        .slice(0,80).map(el => {
+            const r = el.getBoundingClientRect();
+            const round = n => Math.round(n * 100) / 100;
+            return {selector: selector(el), tag: el.localName,
             role: el.getAttribute('role') || '', name: (el.getAttribute('aria-label') || (el.labels?.[0] ? safeText(el.labels[0]) : '')).slice(0,120),
             text: /^(input|textarea|select)$/.test(el.localName) ? '' : safeText(el),
-            enabled: !el.disabled, input_type: el.localName === 'input' ? el.type : ''}));
+            enabled: !el.disabled, input_type: el.localName === 'input' ? el.type : '',
+            bounds: {x:round(r.x), y:round(r.y), width:round(r.width), height:round(r.height)},
+            client_size: {width:el.clientWidth, height:el.clientHeight},
+            scroll_size: {width:el.scrollWidth, height:el.scrollHeight}};
+        });
 }"""
 
 

@@ -14,6 +14,7 @@ from core_engine.evaluation.fixture_model import FixtureModel
 from core_engine.evaluation.grading import grade, summarize
 from core_engine.evaluation.runner import CallBudget, independently_replay, reset, run_suite
 from core_engine.evaluation.site import fixture_site
+from core_engine.evaluation import transfer
 from core_engine.qa_schema import encode_plan
 
 
@@ -71,6 +72,21 @@ class EvaluationUnitTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('playwright'), 'install browser extra')
 class EvaluationBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_transfer_cases_cover_enabled_text_visible_and_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(suite='transfer', case=None, repeats=1, seed=17, output=directory,
+                                      max_model_calls=120, live=False, retest_fixed=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                root, summary, rows = await run_suite(args)
+            self.assertEqual(len(rows), 12)
+            self.assertTrue(all(row['passed'] for row in rows),
+                            [(row['case_id'], row['reason'], row['error_code']) for row in rows if not row['passed']])
+            self.assertEqual(json.loads((root / 'manifest.json').read_text())['suite_version'], 'qa-transfer-v1')
+            self.assertEqual(summary['metrics']['fixed_pair_success']['numerator'], 4)
+            for family in transfer.REPORTS:
+                pair = [case.report_text() for case in transfer.CASES if case.family == family]
+                self.assertEqual(pair[0], pair[1])
+
     async def test_all_fixtures_and_fixed_retests_with_real_browser(self):
         with tempfile.TemporaryDirectory() as directory:
             args = argparse.Namespace(case=None, repeats=1, seed=17, output=directory,

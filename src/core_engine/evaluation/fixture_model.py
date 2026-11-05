@@ -8,8 +8,9 @@ from .cases import reference_plan
 
 
 class FixtureModel:
-    def __init__(self, case, url):
+    def __init__(self, case, url, reference_builder=reference_plan):
         self.case, self.url = case, url
+        self.reference_builder = reference_builder
 
     def generate(self, *, instructions, context, schema, images=()):
         fields = schema["properties"]
@@ -25,7 +26,7 @@ class FixtureModel:
                 "questions": ["기대 동작과 사용한 검색어를 알려주세요."] if missing else []}
         elif "plan" in fields:
             value = {"status": "ready", "questions": [], "rationale": "고정 응답으로 실행기 검증",
-                     "plan": encode_plan(reference_plan(self.case.family, self.url))}
+                     "plan": encode_plan(self.reference_builder(self.case.family, self.url))}
         elif "target" in fields:
             value = {"status": "stop", "target": "", "reason": "고정 모델은 자동 보정하지 않음", "questions": []}
         else:
