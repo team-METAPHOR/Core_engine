@@ -16,6 +16,7 @@ from .analysis_schema import analysis_schema, validate_output
 from .artifacts import JobStore
 from .browser import BrowserRunner, plan_digest
 from .budget import BudgetLimits, RequestBudget
+from .checks import SELECTOR_KINDS
 from .critic import REVIEW_PROMPT, REVIEW_SCHEMA, normalize_review, review_context, supported_revision
 from .images import Screenshot
 from .model import ModelError, strict_json
@@ -36,6 +37,24 @@ from .live import LiveStream
 
 def _words(text):
     return {word for word in re.findall(r"[^\W\d_]{2,}", text.lower())}
+
+
+MAX_REPLAY_PAGES = 2
+
+
+def _page_view(page):
+    """The replayed screen for the model, without host-only grounding bookkeeping."""
+    return {key: value for key, value in page.items() if key not in {"matched_selectors", "step_snapshot_ids"}}
+
+
+def _replay_pages(final, snapshots):
+    """Snapshots after intermediate replayed steps that show elements gone from the final screen
+    (a dialog opened by one step and closed by the next), newest first, at most MAX_REPLAY_PAGES."""
+    ids = set(final.get("step_snapshot_ids", ()))
+    present = {element["selector"] for element in final["elements"]}
+    pages = [snapshot for snapshot in snapshots if snapshot["id"] in ids
+             and any(element["selector"] not in present for element in snapshot["elements"])]
+    return pages[-MAX_REPLAY_PAGES:][::-1]
 
 
 def _leads_toward(selector, snapshot, report):
@@ -472,8 +491,9 @@ class QAService:
                         event("discovering", {"replay": True})
                         final = await runner.inspect(request.entry_url, steps=plan.steps[1:], reset=reset,
                             is_authorized=is_authorized, cancelled=cancelled, budget=budget,
-                            probe=tuple(c.selector for c in (plan.ready, plan.expected, plan.symptom)
-                                        if c is not None and getattr(c, "kind", "text") == "text"))
+                            probe=tuple(selector for c in (plan.ready, plan.expected, plan.symptom)
+                                        if c is not None and getattr(c, "kind", "text") in SELECTOR_KINDS
+                                        for selector in (c.selector, getattr(c, "other_selector", "")) if selector))
                         guard()
                         while final is not None:
                             try:
@@ -492,8 +512,12 @@ class QAService:
                                     plan = grounded
                                 break
                             proposal += 1
-                            images = (recorder.image(final),)
-                            context = {**context, "page": final, "image_order": ["page_after_replay"],
+                            pages = _replay_pages(final, recorder.snapshots)
+                            images = (recorder.image(final), *(recorder.image(page) for page in pages))
+                            context = {**context, "page": _page_view(final), "image_order": ["page_after_replay", *(
+                                           f"page_after_step_{page['step']}" for page in pages)],
+                                       "replay_pages": [{"step": page["step"], "url": page["url"],
+                                                         "elements": page["elements"]} for page in pages],
                                        "validation_feedback": feedback, "rejected_plan": encode_plan(plan),
                                        "previous_questions": []}
                             generated = await calls.invoke("plan_revision", PLAN_REVISION_PROMPT, context, proposal_schema, images)

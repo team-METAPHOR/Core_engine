@@ -325,9 +325,13 @@ the feedback mentioned only one field. Return needs_info only for genuinely miss
 Do NOT append a click after a final assert_text just to satisfy the last-action rule. Remove the final
 assertion and put completion in ready, outcomes in expected/symptom. A final fill is valid and often
 the correct trigger when checking whether an input makes another control enabled.
-When image_order is ["page_after_replay"], page is the screen AFTER the host replayed every recorded
+When image_order starts with "page_after_replay", page is the screen AFTER the host replayed every recorded
 step: rewrite ready/expected/symptom for exactly this screen. Use selectors copied from its
 page.elements (prefer [data-testid=...]/#id) and short values that this screen can show verbatim.
+replay_pages (images page_after_step_N) are screens after earlier replayed steps that show elements
+gone from the final screen, such as a dialog/popup that a later step closed. A visible/enabled/
+clipped/count/attribute check selector must be copied from page.elements or a replay_pages element;
+a selector that matches nothing is never evidence that something is hidden, closed or absent.
 No test verdict or hidden evaluation answer is provided in this feedback.
 """
 REPAIR_PROMPT = DATA_RULES + """

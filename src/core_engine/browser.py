@@ -13,7 +13,7 @@ from typing import Awaitable, Callable
 from uuid import uuid4
 
 from .budget import BudgetLimits, RequestBudget
-from .checks import Check, is_relative, observe_check, text_value, wait_for_check
+from .checks import Check, is_relative, note_matches, observe_check, text_value, wait_for_check
 from .observation import BrowserOptions, Recorder
 from .plan import BrowserPlan, TextCheck
 from .policy import PolicyError, RunPolicy
@@ -163,12 +163,36 @@ class BrowserRunner:
                                 except (PolicyError, Error):
                                     pass
                                 raise
-                            for step in steps:
+                            # Selectors matched by an element on the entry page or after any replayed step:
+                            # a check whose target (a dialog opened by one step and closed by the next, say)
+                            # is gone on the final screen is still grounded by an earlier one.
+                            matched, transient = set(), []
+
+                            async def note(snapshot):
+                                if snapshot is not None:
+                                    matched.update(element["selector"] for element in snapshot["elements"])
+                                for selector in dict.fromkeys(probe):
+                                    try:
+                                        if selector not in matched and await session.page.locator("css=" + selector).count() > 0:
+                                            matched.add(selector)
+                                    except Error:
+                                        pass
+                            if steps:
+                                await note(None)
+                            for index, step in enumerate(steps):
                                 try:
                                     await _perform(session, step, self.options.step_timeout_ms)
                                 except (PolicyError, Error, AssertionError):
                                     return None
+                                if index < len(steps) - 1:
+                                    snapshot = await session.capture(0, index + 1, "replay_step")
+                                    await note(snapshot)
+                                    if snapshot is not None:
+                                        transient.append(snapshot["id"])
                             result = await session.capture(0, len(steps), "replayed" if steps else "discovery")
+                            if result is not None and steps:
+                                await note(result)
+                                result = {**result, "matched_selectors": sorted(matched), "step_snapshot_ids": transient}
                             if result is not None and probe:
                                 # Check selectors (often container divs not listed in elements) that
                                 # resolve to exactly one visible element on this screen.
@@ -254,6 +278,8 @@ class BrowserRunner:
         compared = {check.selector for check in (plan.expected, plan.symptom)
                     if isinstance(check, Check) and check.kind == "text"}
         started, stage, timeline = time.monotonic(), "environment", []
+        # Check selectors matched by an element so far in this attempt (absence counts only after a match).
+        checks, seen = (plan.ready, plan.expected, plan.symptom), set()
         responses = [(check.other_selector, check.selector, int(check.value))
                      for check in (plan.expected, plan.symptom) if isinstance(check, Check)
                      and check.kind == "response_status"]
@@ -282,6 +308,7 @@ class BrowserRunner:
                         snapshot = await session.capture(ordinal, index, "before")
                         if snapshot:
                             snapshots.append(snapshot["id"])
+                        await note_matches(session.page, checks, seen)
                         if index == len(plan.steps) - 1 and step.action not in {"navigate", "reload", "back"}:
                             for selector in compared:
                                 before_text = await text_value(session.page, selector)
@@ -289,7 +316,7 @@ class BrowserRunner:
                                     baseline[selector] = before_text
                         if index == len(plan.steps) - 1 and step.action not in {"navigate", "reload", "back"} and getattr(plan.ready, "kind", "text") in {"text", "attribute"}:
                             try:
-                                already_ready = await observe_check(session.page, plan.ready, session.network)
+                                already_ready = await observe_check(session.page, plan.ready, session.network, seen=seen)
                             except PolicyError:
                                 already_ready = False
                             completion_evidence = {"ready_before_final_action": already_ready,
@@ -308,8 +335,8 @@ class BrowserRunner:
                                 }""", attribute)
                                 try:
                                     before_outcomes = None if relative_decided else (
-                                        await observe_check(session.page, plan.expected, session.network) if plan.expected else None,
-                                        await observe_check(session.page, plan.symptom, session.network))
+                                        await observe_check(session.page, plan.expected, session.network, seen=seen) if plan.expected else None,
+                                        await observe_check(session.page, plan.symptom, session.network, seen=seen))
                                 except PolicyError:
                                     before_outcomes = None
                         await _perform(session, step, plan.step_timeout_ms)
@@ -320,10 +347,11 @@ class BrowserRunner:
                         snapshot = await session.capture(ordinal, index, "after")
                         if snapshot:
                             snapshots.append(snapshot["id"])
+                        await note_matches(session.page, checks, seen)
                     mark("readiness")
                     try:
                         await wait_for_check(session.page, plan.ready, plan.step_timeout_ms, session.check, session.network,
-                                             paused=transport.budget.rate_waited_seconds)
+                                             paused=transport.budget.rate_waited_seconds, seen=seen)
                         ready = True
                     except PolicyError as exc:
                         if exc.code != "STEP_OR_READINESS_FAILED" or plan.expected is None:
@@ -335,9 +363,9 @@ class BrowserRunner:
                     try:
                         if isinstance(plan.symptom, TextCheck):
                             await session.page.locator("css=" + plan.symptom.selector).wait_for(state="visible")
-                        observed = await observe_check(session.page, plan.symptom, session.network, baseline)
+                        observed = await observe_check(session.page, plan.symptom, session.network, baseline, seen)
                         if plan.expected is not None:
-                            expected = await observe_check(session.page, plan.expected, session.network, baseline)
+                            expected = await observe_check(session.page, plan.expected, session.network, baseline, seen)
                             if observed == expected:
                                 changed_text = await _unchanged_fallback(session.page, plan, baseline) if not observed else None
                                 if changed_text is None:
@@ -348,7 +376,8 @@ class BrowserRunner:
                                 observed, expected, relative_decided = not changed_text, changed_text, True
                                 warnings.append("RELATIVE_CHANGE_FALLBACK")
                     except (PolicyError, Error) as exc:
-                        if not ready:
+                        # A check selector that never matched an element cannot decide the outcome.
+                        if not ready and getattr(exc, "code", None) != "CHECK_TARGET_NEVER_MATCHED":
                             raise PolicyError("STEP_OR_READINESS_FAILED") from None
                         raise exc
                     session.check()
